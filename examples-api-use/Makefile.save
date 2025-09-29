@@ -1,7 +1,7 @@
 CFLAGS=-Wall -O3 -g -Wextra -Wno-unused-parameter
 CXXFLAGS=$(CFLAGS)
-OBJECTS=demo-main.o minimal-example.o c-example.o text-example.o scrolling-text-example.o clock.o ledcat.o input-example.o pixel-mover.o image-cats.o cats.o
-BINARIES=demo minimal-example c-example text-example scrolling-text-example clock ledcat input-example pixel-mover image-cats cats
+OBJECTS=demo-main.o minimal-example.o c-example.o text-example.o scrolling-text-example.o clock.o ledcat.o input-example.o pixel-mover.o image-cats.o
+BINARIES=demo minimal-example c-example text-example scrolling-text-example clock ledcat input-example pixel-mover image-cats
 
 # Where our library resides. You mostly only need to change the
 # RGB_LIB_DISTRIBUTION, this is where the library is checked out.
@@ -31,6 +31,7 @@ scrolling-text-example : scrolling-text-example.o
 clock : clock.o
 ledcat : ledcat.o
 pixel-mover : pixel-mover.o
+image-cats: image-cats.cc
 
 # All the binaries that have the same name as the object file.q
 % : %.o $(RGB_LIBRARY)
@@ -42,17 +43,7 @@ image-example.o : image-example.cc
 image-example: image-example.o $(RGB_LIBRARY)
 	$(CXX) $< -o $@ $(LDFLAGS) $(MAGICK_LDFLAGS)
 
-image-cats.o : image-cats.cc
-	$(CXX) -I$(RGB_INCDIR) $(CXXFLAGS) $(MAGICK_CXXFLAGS) -c -o $@ $<
 
-image-cats: image-cats.o $(RGB_LIBRARY)
-	$(CXX) $< -o $@ $(LDFLAGS) $(MAGICK_LDFLAGS)
-
-cats.o : cats.cc
-	$(CXX) -I$(RGB_INCDIR) $(CXXFLAGS) $(MAGICK_CXXFLAGS) -c -o $@ $<
-
-cats: cats.o $(RGB_LIBRARY)
-	$(CXX) $< -o $@ $(LDFLAGS) $(MAGICK_LDFLAGS) -lcurl -ljsoncpp
 
 # Since the C example uses the C++ library underneath, which depends on C++
 # runtime stuff, you still have to also link -lstdc++
