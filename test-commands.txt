@@ -1,0 +1,7 @@
+sudo ./demo --led-rows=32 --led-cols=64 --led-panel-type=FM6127 --led-gpio-mapping=regular -D11
+
+
+sudo ./image-example --led-rows=32 --led-cols=64 --led-panel-type=FM6127 --led-gpio-mapping=regular ../img/fungus_small.png
+
+
+
