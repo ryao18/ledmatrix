@@ -354,6 +354,15 @@ void DrawFactText(Canvas *canvas, const Font &font, const std::string &fact_text
   DrawText(canvas, font, scroll_offset, WEATHER_Y + 3, fact_color, fact_text.c_str());
 }
 
+// Utility function to compute string width in pixels for the font
+int GetStringWidth(const Font& font, const std::string& text) {
+  int width = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    width += font.CharacterWidth((uint8_t)text[i]);
+  }
+  return width;
+}
+
 // Display two static images with clock (using double-buffering to prevent flicker)
 // ...update display functions to accept fact_font...
 void ShowDualStaticImagesWithClock(const Magick::Image &left_image, 
@@ -388,7 +397,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     // If fact changed, reset scroll position
     if (current_fact_text != last_fact_text) {
       last_fact_text = current_fact_text;
-      fact_width = fact_font.CharacterWidth(current_fact_text.c_str(), -1);
+      fact_width = GetStringWidth(fact_font, current_fact_text);
       scroll_offset = MATRIX_WIDTH;  // Reset to start from right
     }
     
