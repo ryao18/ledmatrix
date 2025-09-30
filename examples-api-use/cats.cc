@@ -528,17 +528,15 @@ int main(int argc, char *argv[]) {
   Font fact_font; // For scrolling fact text
   Font* fact_font_ptr = &fact_font;
 
-  // normal clock font
-  if (!font.LoadFont("/home/ryao/rpi-rgb-led-matrix/fonts/5x7.bdf")) { 
+  if (!font.LoadFont("/opt/cats-display/fonts/5x7.bdf")) { 
       fprintf(stderr, "Could not load font for clock!\n");
       return 1;
   }
-  // bigger scrolling fact text
-  if (!fact_font.LoadFont("/home/ryao/rpi-rgb-led-matrix/fonts/7x13.bdf")) {
+  if (!fact_font.LoadFont("/opt/cats-display/fonts/7x13.bdf")) {
       fprintf(stderr, "Could not load font 7x13 for facts!\n");
-      if (!fact_font.LoadFont("/home/ryao/rpi-rgb-led-matrix/fonts/6x13.bdf")) {
+      if (!fact_font.LoadFont("/opt/cats-display/fonts/6x13.bdf")) {
           fprintf(stderr, "Could not load font 6x13 for facts!\n");
-          if (!fact_font.LoadFont("/home/ryao/rpi-rgb-led-matrix/fonts/5x8.bdf")) {
+          if (!fact_font.LoadFont("/opt/cats-display/fonts/5x8.bdf")) {
               fprintf(stderr, "Could not load large font 5x8 for facts. Using default.\n");
               fact_font_ptr = &font; // fallback to pointer
           }
