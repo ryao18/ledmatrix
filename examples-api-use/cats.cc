@@ -351,7 +351,7 @@ void DrawFactText(Canvas *canvas, const Font &font, const std::string &fact_text
   Color fact_color(100, 255, 100);  // Green for facts
   
   // Draw fact text with scrolling offset
-  DrawText(canvas, font, scroll_offset, WEATHER_Y + 3, fact_color, fact_text.c_str());
+  DrawText(canvas, font, scroll_offset, WEATHER_Y + 2, fact_color, fact_text.c_str());
 }
 
 // Utility function to compute string width in pixels for the font
@@ -541,10 +541,10 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Could not load font for clock!\n");
       return 1;
   }
-  if (!fact_font.LoadFont("/opt/cats-display/fonts/7x13.bdf")) {
-      fprintf(stderr, "Could not load font 7x13 for facts!\n");
-      if (!fact_font.LoadFont("/opt/cats-display/fonts/6x13.bdf")) {
-          fprintf(stderr, "Could not load font 6x13 for facts!\n");
+  if (!fact_font.LoadFont("/opt/cats-display/fonts/6x13.bdf")) {
+      fprintf(stderr, "Could not load font 6x13 for facts!\n");
+      if (!fact_font.LoadFont("/opt/cats-display/fonts/6x9.bdf")) {
+          fprintf(stderr, "Could not load font 6x9 for facts!\n");
           if (!fact_font.LoadFont("/opt/cats-display/fonts/5x8.bdf")) {
               fprintf(stderr, "Could not load large font 5x8 for facts. Using default.\n");
               fact_font_ptr = &font; // fallback to pointer
