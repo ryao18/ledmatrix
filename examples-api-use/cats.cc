@@ -528,13 +528,17 @@ int main(int argc, char *argv[]) {
   Font fact_font; // For scrolling fact text
 
   // Load normal font for clock
-  if (!font.LoadFont("fonts/5x7.bdf")) { /* fallback logic... */ }
+  if (!font.LoadFont("fonts/5x7.bdf")) { 
+        fprintf(stderr, "Could not load font for clock!\n");
+  }
 
   // Try a big font that fits your display
   if (!fact_font.LoadFont("fonts/7x13.bdf")) {
+      fprintf(stderr, "Could not load font 7x13 for facts!\n");
       if (!fact_font.LoadFont("fonts/6x13.bdf")) {
+          fprintf(stderr, "Could not load font 6x13 for facts!\n");
           if (!fact_font.LoadFont("fonts/5x8.bdf")) {
-              fprintf(stderr, "Could not load large font for facts. Using default.\n");
+              fprintf(stderr, "Could not load large font 5x8 for facts. Using default.\n");
               fact_font = font; // fallback
           }
       }
