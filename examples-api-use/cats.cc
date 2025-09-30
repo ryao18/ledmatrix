@@ -461,7 +461,7 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
       // If fact changed, reset scroll position
       if (current_fact_text != last_fact_text) {
         last_fact_text = current_fact_text;
-        fact_width = current_fact_text.length() * 4;  // Rough width calculation
+        fact_width = GetStringWidth(fact_font, current_fact_text);
         scroll_offset = MATRIX_WIDTH;  // Reset to start from right
       }
       
