@@ -526,10 +526,12 @@ int main(int argc, char *argv[]) {
 
   Font font;      // For clock and general text
   Font fact_font; // For scrolling fact text
+  Font* fact_font_ptr = &fact_font;
 
   // Load normal font for clock
   if (!font.LoadFont("fonts/5x7.bdf")) { 
-        fprintf(stderr, "Could not load font for clock!\n");
+      fprintf(stderr, "Could not load font for clock!\n");
+      return 1;
   }
 
   // Try a big font that fits your display
@@ -539,11 +541,10 @@ int main(int argc, char *argv[]) {
           fprintf(stderr, "Could not load font 6x13 for facts!\n");
           if (!fact_font.LoadFont("fonts/5x8.bdf")) {
               fprintf(stderr, "Could not load large font 5x8 for facts. Using default.\n");
-              fact_font = font; // fallback
+              fact_font_ptr = &font; // fallback to pointer
           }
       }
   }
-
   // Verify matrix dimensions
   if (matrix->width() != MATRIX_WIDTH || matrix->height() != MATRIX_HEIGHT) {
     fprintf(stderr, "Warning: Expected %dx%d matrix, got %dx%d\n", 
@@ -594,9 +595,9 @@ int main(int argc, char *argv[]) {
   bool right_animated = right_images.size() > 1;
   
   if (!left_animated && !right_animated) {
-      ShowDualStaticImagesWithClock(left_images[0], right_images[0], matrix, font, fact_font);
+    ShowDualStaticImagesWithClock(left_images[0], right_images[0], matrix, font, *fact_font_ptr);
   } else {
-      ShowDualAnimatedImagesWithClock(left_images, right_images, matrix, font, fact_font);
+    ShowDualAnimatedImagesWithClock(left_images, right_images, matrix, font, *fact_font_ptr);
   }
 
   // Clean shutdown
