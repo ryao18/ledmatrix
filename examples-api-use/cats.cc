@@ -530,10 +530,10 @@ int main(int argc, char *argv[]) {
   // Load normal font for clock
   if (!font.LoadFont("fonts/5x7.bdf")) { /* fallback logic... */ }
 
-  // Try largest font first for facts
-  if (!fact_font.LoadFont("fonts/10x20.bdf")) {
-      if (!fact_font.LoadFont("fonts/9x18.bdf")) {
-          if (!fact_font.LoadFont("fonts/8x13.bdf")) {
+  // Try a big font that fits your display
+  if (!fact_font.LoadFont("fonts/9x18.bdf")) {
+      if (!fact_font.LoadFont("fonts/8x13.bdf")) {
+          if (!fact_font.LoadFont("fonts/7x13.bdf")) {
               fprintf(stderr, "Could not load large font for facts. Using default.\n");
               fact_font = font; // fallback
           }
