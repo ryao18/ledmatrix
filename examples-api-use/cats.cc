@@ -388,7 +388,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     // If fact changed, reset scroll position
     if (current_fact_text != last_fact_text) {
       last_fact_text = current_fact_text;
-      fact_width = current_fact_text.length() * 6;  // Rough width calculation
+      fact_width = DrawText(nullptr, fact_font, 0, 0, Color(), current_fact_text.c_str());
       scroll_offset = MATRIX_WIDTH;  // Reset to start from right
     }
     
