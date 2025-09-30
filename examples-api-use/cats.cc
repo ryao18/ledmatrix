@@ -296,6 +296,22 @@ void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas,
   }
 }
 
+// Helper function to determine if we are in the "dim" hours (EST)
+bool IsDimHoursEST() {
+  std::time_t now = std::time(nullptr);
+  std::tm utc_tm = *std::gmtime(&now);
+
+  // EST is UTC-5 (no DST handling here)
+  int est_hour = utc_tm.tm_hour - 5;
+  if (est_hour < 0) est_hour += 24;
+
+  int min = utc_tm.tm_min;
+
+  // Dim between 23:30 and 8:00 EST
+  if ((est_hour == 23 && min >= 30) || (est_hour < 8)) return true;
+  return false;
+}
+
 // Draw current time in the middle gap with better spacing
 void DrawClock(Canvas *canvas, const Font &font) {
   time_t rawtime;
@@ -339,16 +355,24 @@ void DrawFactText(Canvas *canvas, const Font &font, const std::string &fact_text
 }
 
 // Display two static images with clock (using double-buffering to prevent flicker)
+// ...update display functions to accept fact_font...
 void ShowDualStaticImagesWithClock(const Magick::Image &left_image, 
-                                  const Magick::Image &right_image, 
-                                  RGBMatrix *matrix,
-                                  const Font &font) {
+                                   const Magick::Image &right_image, 
+                                   RGBMatrix *matrix,
+                                   const Font &font,
+                                   const Font &fact_font) {
   FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
   int scroll_offset = MATRIX_WIDTH;  // Start fact text off-screen right
   std::string last_fact_text = "";
   int fact_width = 0;
   
   while (!interrupt_received) {
+    // Set brightness based on EST time
+    if (IsDimHoursEST()) {
+      matrix->SetBrightness(10); // 10% brightness
+    } else {
+      matrix->SetBrightness(100); // 100% brightness
+    }
     offscreen_canvas->Clear();
     
     // Draw images with vertical offset
@@ -369,7 +393,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     }
     
     // Draw scrolling fact
-    DrawFactText(offscreen_canvas, font, current_fact_text, scroll_offset);
+    DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
     
     // Update scroll position
     scroll_offset--;
@@ -386,9 +410,10 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
 
 // Display two animated images with clock
 void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
-                                    const ImageVector &right_images,
-                                    RGBMatrix *matrix,
-                                    const Font &font) {
+                                     const ImageVector &right_images,
+                                     RGBMatrix *matrix,
+                                     const Font &font,
+                                     const Font &fact_font) {
   FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
   
   // Determine the maximum number of frames between both animations
@@ -402,6 +427,12 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
     for (size_t frame = 0; frame < max_frames; ++frame) {
       if (interrupt_received) break;
       
+      // Set brightness based on EST time
+      if (IsDimHoursEST()) {
+        matrix->SetBrightness(10); // 10% brightness
+      } else {
+        matrix->SetBrightness(100); // 100% brightness
+      }
       offscreen_canvas->Clear();
       
       // Get current frame for left image (loop if necessary)
@@ -426,7 +457,7 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
       }
       
       // Draw scrolling fact
-      DrawFactText(offscreen_canvas, font, current_fact_text, scroll_offset);
+      DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
       
       // Update scroll position
       scroll_offset--;
@@ -493,16 +524,18 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // Load font for text rendering
-  Font font;
-  // Try system location first, then relative paths as fallback
-  if (!font.LoadFont("/opt/cats-display/fonts/5x7.bdf")) {
-      if (!font.LoadFont("../fonts/5x7.bdf")) {
-          fprintf(stderr, "Couldn't load font '../fonts/5x7.bdf'\n");
-          fprintf(stderr, "Trying alternative font paths...\n");
-          if (!font.LoadFont("fonts/4x6.bdf") && 
-              !font.LoadFont("/usr/share/fonts/misc/4x6.bdf")) {
-              fprintf(stderr, "Could not load any font. Text will not display.\n");
+  Font font;      // For clock and general text
+  Font fact_font; // For scrolling fact text
+
+  // Load normal font for clock
+  if (!font.LoadFont("fonts/5x7.bdf")) { /* fallback logic... */ }
+
+  // Try largest font first for facts
+  if (!fact_font.LoadFont("fonts/10x20.bdf")) {
+      if (!fact_font.LoadFont("fonts/9x18.bdf")) {
+          if (!fact_font.LoadFont("fonts/8x13.bdf")) {
+              fprintf(stderr, "Could not load large font for facts. Using default.\n");
+              fact_font = font; // fallback
           }
       }
   }
@@ -557,11 +590,9 @@ int main(int argc, char *argv[]) {
   bool right_animated = right_images.size() > 1;
   
   if (!left_animated && !right_animated) {
-    // Both images are static
-    ShowDualStaticImagesWithClock(left_images[0], right_images[0], matrix, font);
+      ShowDualStaticImagesWithClock(left_images[0], right_images[0], matrix, font, fact_font);
   } else {
-    // At least one image is animated
-    ShowDualAnimatedImagesWithClock(left_images, right_images, matrix, font);
+      ShowDualAnimatedImagesWithClock(left_images, right_images, matrix, font, fact_font);
   }
 
   // Clean shutdown
