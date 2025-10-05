@@ -18,3 +18,7 @@ sudo systemctl daemon-reload
 sudo systemctl start cats-display
 sudo systemctl restart cats-display
 sudo systemctl status cats-display
+
+
+to tail the logs:
+    journalctl -u cats-display -f
