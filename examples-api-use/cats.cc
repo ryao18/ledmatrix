@@ -413,7 +413,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     // Swap buffers to prevent flicker
     offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
     
-    usleep(20000);  // 20ms delay for smooth scrolling
+    usleep(8000);  // 8ms delay for smooth scrolling
   }
 }
 
