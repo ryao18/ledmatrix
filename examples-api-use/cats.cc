@@ -374,7 +374,8 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
   int scroll_offset = MATRIX_WIDTH;  // Start fact text off-screen right
   std::string last_fact_text = "";
   int fact_width = 0;
-  int last_brightness = -1; // <-- add this line
+  int last_brightness = -1; 
+  std::string last_time_str;
 
   while (!interrupt_received) {
   // --- Brightness ---
