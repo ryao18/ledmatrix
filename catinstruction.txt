@@ -24,4 +24,5 @@ sudo systemctl status cats-display
 
 
 to tail the logs:
-    journalctl -u cats-display -f
+journalctl -u cats-display -f
+
