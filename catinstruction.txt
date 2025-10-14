@@ -16,7 +16,10 @@ sudo ./cats --led-rows=32 --led-cols=64 --led-brightness=50 ../img/oceansunroom_
 sudo nano /etc/systemd/system/cats-display.service
 sudo systemctl daemon-reload
 sudo systemctl start cats-display
+
 sudo systemctl restart cats-display
+sudo systemctl stop cats-display
+
 sudo systemctl status cats-display
 
 

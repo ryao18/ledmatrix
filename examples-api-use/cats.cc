@@ -374,7 +374,8 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
   int scroll_offset = MATRIX_WIDTH;  // Start fact text off-screen right
   std::string last_fact_text = "";
   int fact_width = 0;
-  
+  int last_brightness = -1; // <-- add this line
+
   while (!interrupt_received) {
   // --- Brightness ---
     int brightness = IsDimHoursEST() ? 10 : 100;
@@ -428,7 +429,8 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
   }
 }
 
-// Display two animated images with clockvoid ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
+// Display two animated images with clock
+void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
                                      const ImageVector &right_images,
                                      RGBMatrix *matrix,
                                      const Font &font,
