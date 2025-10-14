@@ -363,7 +363,7 @@ int GetStringWidth(const Font& font, const std::string& text) {
   return width;
 }
 
-// Display two static images with clock (using double-buffering to prevent flicker)
+// Optimized version - only redraws what's necessary
 void ShowDualStaticImagesWithClock(const Magick::Image &left_image, 
                                    const Magick::Image &right_image, 
                                    RGBMatrix *matrix,
@@ -376,15 +376,9 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
   int last_brightness = -1; 
   std::string last_time_str;
   time_t last_brightness_check = 0;
-  int frame_count = 0;
-
-  // Pre-render the static parts ONCE
-  FrameCanvas *static_canvas = matrix->CreateFrameCanvas();
-  CopyImageToCanvas(left_image, static_canvas, LEFT_IMAGE_X, IMAGE_Y);
-  CopyImageToCanvas(right_image, static_canvas, RIGHT_IMAGE_X, IMAGE_Y);
+  bool images_drawn = false;
 
   while (!interrupt_received) {
-    frame_count++;
     time_t now = time(nullptr);
     
     // Check brightness only every 60 seconds
@@ -397,17 +391,12 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
       last_brightness_check = now;
     }
 
-    // Get current time - but only update clock display every ~60 frames (half second)
-    bool should_update_clock = (frame_count % 60 == 0);
-    std::string current_time_str = last_time_str;
+    // Get current time
+    struct tm *timeinfo = localtime(&now);
+    char time_buffer[16];
+    strftime(time_buffer, sizeof(time_buffer), "%H:%M", timeinfo);
+    std::string current_time_str(time_buffer);
     
-    if (should_update_clock) {
-      struct tm *timeinfo = localtime(&now);
-      char time_buffer[16];
-      strftime(time_buffer, sizeof(time_buffer), "%H:%M", timeinfo);
-      current_time_str = std::string(time_buffer);
-    }
-
     std::string current_fact_text = GetCurrentFact();
 
     // Reset scroll if fact changed
@@ -417,34 +406,33 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
       scroll_offset = MATRIX_WIDTH;
     }
 
-    // Always update scroll, but only redraw static parts when needed
-    bool time_changed = (current_time_str != last_time_str);
-    
-    if (time_changed) {
-      // Full redraw needed - copy from static canvas
+    // Draw images only once at startup
+    if (!images_drawn) {
       offscreen_canvas->Clear();
-      // Copy pre-rendered images (much faster than CopyImageToCanvas)
-      for (int y = 0; y < MATRIX_HEIGHT; ++y) {
-        for (int x = 0; x < MATRIX_WIDTH; ++x) {
-          uint8_t r, g, b;
-          static_canvas->GetPixel(x, y, &r, &g, &b);
-          if (r != 0 || g != 0 || b != 0) {  // Skip black pixels for speed
-            offscreen_canvas->SetPixel(x, y, r, g, b);
-          }
+      CopyImageToCanvas(left_image, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
+      CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
+      images_drawn = true;
+    }
+
+    // Only redraw clock if time changed
+    if (current_time_str != last_time_str) {
+      // Clear only clock area (columns 18-45, rows 8-20)
+      for (int y = 8; y < 20; ++y) {
+        for (int x = CLOCK_X; x < CLOCK_X + CLOCK_WIDTH; ++x) {
+          offscreen_canvas->SetPixel(x, y, 0, 0, 0);
         }
       }
       DrawClock(offscreen_canvas, font);
       last_time_str = current_time_str;
-    } else {
-      // Only clear and redraw the fact scrolling area (bottom 4 rows)
-      for (int y = WEATHER_Y - 2; y < MATRIX_HEIGHT; ++y) {
-        for (int x = 0; x < MATRIX_WIDTH; ++x) {
-          offscreen_canvas->SetPixel(x, y, 0, 0, 0);
-        }
+    }
+
+    // Always clear and redraw the scrolling text area (bottom rows)
+    for (int y = WEATHER_Y - 2; y < MATRIX_HEIGHT; ++y) {
+      for (int x = 0; x < MATRIX_WIDTH; ++x) {
+        offscreen_canvas->SetPixel(x, y, 0, 0, 0);
       }
     }
     
-    // Always draw the scrolling fact
     DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
     offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
 
