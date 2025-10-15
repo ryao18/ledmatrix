@@ -457,7 +457,8 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
   while (!interrupt_received) {
     for (size_t frame = 0; frame < max_frames; ++frame) {
       if (interrupt_received) break;
-
+      
+      time_t now = time(nullptr);
       // Check brightness only every 60 seconds
       if (now - last_brightness_check >= 60) {
         int brightness = IsDimHoursEST() ? 10 : 100;
