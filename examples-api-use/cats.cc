@@ -299,16 +299,13 @@ void CopyImageToCanvas(const Magick::Image &image, Canvas *canvas,
 // Helper function to determine if we are in the "dim" hours (EST)
 bool IsDimHoursEST() {
   std::time_t now = std::time(nullptr);
-  std::tm utc_tm = *std::gmtime(&now);
+  std::tm *local = std::localtime(&now);  // Uses system timezone
 
-  // EST is UTC-5 (no DST handling here)
-  int est_hour = utc_tm.tm_hour - 5;
-  if (est_hour < 0) est_hour += 24;
-
-  int min = utc_tm.tm_min;
+  int hour = local->tm_hour;
+  int min = local->tm_min;
 
   // Dim between 23:30 and 8:00 EST
-  if ((est_hour == 23 && min >= 30) || (est_hour < 8)) return true;
+  if ((hour == 23 && min >= 30) || (hour < 8)) return true;
   return false;
 }
 
