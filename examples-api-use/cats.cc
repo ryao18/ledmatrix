@@ -374,15 +374,22 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
   int scroll_offset = MATRIX_WIDTH;  // Start fact text off-screen right
   std::string last_fact_text = "";
   int fact_width = 0;
+  time_t last_brightness_check = 0;
   int last_brightness = -1; 
   std::string last_time_str;
 
   while (!interrupt_received) {
-  // --- Brightness ---
-    int brightness = IsDimHoursEST() ? 10 : 100;
-    if (brightness != last_brightness) {
-      matrix->SetBrightness(brightness);
-      last_brightness = brightness;
+    // --- Brightness ---
+    time_t now = time(nullptr);
+    
+    // Check brightness only every 60 seconds
+    if (now - last_brightness_check >= 60) {
+      int brightness = IsDimHoursEST() ? 10 : 100;
+      if (brightness != last_brightness) {
+        matrix->SetBrightness(brightness);
+        last_brightness = brightness;
+      }
+      last_brightness_check = now;
     }
 
     // --- Time ---
@@ -407,8 +414,8 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     // --- Only redraw if something changed ---
     static int last_scroll_offset = -1;
     if (current_time_str != last_time_str ||
-        current_fact_text != last_fact_text ||
-        scroll_offset != last_scroll_offset) {
+      current_fact_text != last_fact_text ||
+      scroll_offset != last_scroll_offset) {
       offscreen_canvas->Clear();
       CopyImageToCanvas(left_image, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
       CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
@@ -443,6 +450,7 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
   std::string last_fact_text = "";
   int fact_width = 0;
   int last_brightness = -1;
+  time_t last_brightness_check = 0;
   std::string last_time_str;
   static int last_scroll_offset = -1;
 
@@ -450,11 +458,14 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
     for (size_t frame = 0; frame < max_frames; ++frame) {
       if (interrupt_received) break;
 
-      // --- Brightness ---
-      int brightness = IsDimHoursEST() ? 10 : 100;
-      if (brightness != last_brightness) {
-        matrix->SetBrightness(brightness);
-        last_brightness = brightness;
+      // Check brightness only every 60 seconds
+      if (now - last_brightness_check >= 60) {
+        int brightness = IsDimHoursEST() ? 10 : 100;
+        if (brightness != last_brightness) {
+          matrix->SetBrightness(brightness);
+          last_brightness = brightness;
+        }
+        last_brightness_check = now;
       }
 
       // --- Time ---
@@ -478,8 +489,8 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
 
       // --- Only redraw if something changed ---
       if (current_time_str != last_time_str ||
-          current_fact_text != last_fact_text ||
-          scroll_offset != last_scroll_offset) {
+        current_fact_text != last_fact_text ||
+        scroll_offset != last_scroll_offset) {
         offscreen_canvas->Clear();
         const Magick::Image &left_frame = left_images[frame % left_images.size()];
         CopyImageToCanvas(left_frame, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
