@@ -302,7 +302,7 @@ bool IsDimHoursEST() {
   std::tm utc_tm = *std::gmtime(&now);
 
   // EST is UTC-5 (no DST handling here)
-  int est_hour = utc_tm.tm_hour - 5;
+  int est_hour = utc_tm.tm_hour - 6;
   if (est_hour < 0) est_hour += 24;
 
   int min = utc_tm.tm_min;
