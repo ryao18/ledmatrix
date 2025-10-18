@@ -230,11 +230,8 @@ void FactUpdateThread() {
       printf("Exception in fact update: %s\n", e.what());
     }
     
-    // Check every hour if it's a new day (much less frequent than before)
-    for (int i = 0; i < 3600 && !should_stop_fact_thread; ++i) {
-      // Sleep for 5 minutes instead of looping every second
-      std::this_thread::sleep_for(std::chrono::minutes(5));
-    }
+    // Check every 30 minutes if it's a new day
+    std::this_thread::sleep_for(std::chrono::minutes(30));
   }
 }
 
