@@ -370,7 +370,6 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
     time_t last_brightness_check = 0;
     int last_brightness = -1; 
     std::string last_time_str = "";
-    bool images_need_redraw = true;
 
     while (!interrupt_received) {
         time_t now = time(nullptr);
@@ -401,19 +400,19 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
             scroll_offset = MATRIX_WIDTH;
         }
 
-        // Only redraw images if first time or time changed
+        // Only do full clear when time changes
         bool time_changed = (current_time_str != last_time_str);
-        
-        if (images_need_redraw || time_changed) {
+        if (time_changed) {
             offscreen_canvas->Clear();
-            CopyImageToCanvas(left_image, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
-            CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
-            DrawClock(offscreen_canvas, font);
-            images_need_redraw = false;
             last_time_str = current_time_str;
         }
         
-        // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
+        // ALWAYS redraw images and clock (they're static, so it's cheap)
+        CopyImageToCanvas(left_image, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
+        CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
+        DrawClock(offscreen_canvas, font);
+        
+        // Clear and redraw ONLY the scrolling text area
         for (int y = 20; y < MATRIX_HEIGHT; ++y) {
             for (int x = 0; x < MATRIX_WIDTH; ++x) {
                 offscreen_canvas->SetPixel(x, y, 0, 0, 0);
@@ -423,7 +422,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
         // Draw scrolling fact
         DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
         
-        // Swap buffers (IMPORTANT: removed post-swap redraw)
+        // Swap buffers
         offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
 
         // Update scroll position
@@ -437,132 +436,94 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
 }
 
 // Display two animated images with clock
+// Display two animated images with clock
 void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
                                      const ImageVector &right_images,
                                      RGBMatrix *matrix,
                                      const Font &font,
                                      const Font &fact_font) {
-    FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
-    size_t max_frames = std::max(left_images.size(), right_images.size());
+  FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
+  size_t max_frames = std::max(left_images.size(), right_images.size());
 
-    int scroll_offset = MATRIX_WIDTH;
-    std::string last_fact_text = "";
-    int fact_width = 0;
-    int last_brightness = -1;
-    time_t last_brightness_check = 0;
-    std::string last_time_str = "";
-    size_t last_frame_drawn = (size_t)-1;
+  int scroll_offset = MATRIX_WIDTH;
+  std::string last_fact_text = "";
+  int fact_width = 0;
+  int last_brightness = -1;
+  time_t last_brightness_check = 0;
+  std::string last_time_str;
+  static int last_scroll_offset = -1;
 
-    while (!interrupt_received) {
-        for (size_t frame = 0; frame < max_frames; ++frame) {
-            if (interrupt_received) break;
-            
-            time_t now = time(nullptr);
-            
-            // Check brightness only every 30 minutes (1800 seconds)
-            if (now - last_brightness_check >= 1800) {
-                int brightness = IsDimHoursEST() ? 10 : 100;
-                if (brightness != last_brightness) {
-                    matrix->SetBrightness(brightness);
-                    last_brightness = brightness;
-                }
-                last_brightness_check = now;
-            }
-
-            // Get current time
-            struct tm *timeinfo = localtime(&now);
-            char time_buffer[16];
-            strftime(time_buffer, sizeof(time_buffer), "%H:%M", timeinfo);
-            std::string current_time_str(time_buffer);
-
-            // Get current fact
-            std::string current_fact_text = GetCurrentFact();
-
-            // Check if fact changed
-            if (current_fact_text != last_fact_text) {
-                last_fact_text = current_fact_text;
-                fact_width = GetStringWidth(fact_font, current_fact_text);
-                scroll_offset = MATRIX_WIDTH;
-            }
-
-            // Determine what needs redrawing
-            bool time_changed = (current_time_str != last_time_str);
-            bool frame_changed = (frame != last_frame_drawn);
-            bool need_full_redraw = time_changed || frame_changed;
-
-            // Only redraw images/clock when frame or time changes
-            if (need_full_redraw) {
-                offscreen_canvas->Clear();
-                
-                const Magick::Image &left_frame = left_images[frame % left_images.size()];
-                CopyImageToCanvas(left_frame, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
-                
-                const Magick::Image &right_frame = right_images[frame % right_images.size()];
-                CopyImageToCanvas(right_frame, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
-                
-                DrawClock(offscreen_canvas, font);
-                
-                last_frame_drawn = frame;
-                last_time_str = current_time_str;
-            }
-            
-            // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
-            for (int y = 20; y < MATRIX_HEIGHT; ++y) {
-                for (int x = 0; x < MATRIX_WIDTH; ++x) {
-                    offscreen_canvas->SetPixel(x, y, 0, 0, 0);
-                }
-            }
-
-            // Draw scrolling fact
-            DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
-            
-            // Swap buffers (IMPORTANT: removed post-swap redraw)
-            offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
-
-            // Frame delay calculation
-            int delay = 0;
-            if (frame < left_images.size()) {
-                delay = left_images[frame].animationDelay();
-            }
-            if (frame < right_images.size()) {
-                int right_delay = right_images[frame].animationDelay();
-                delay = (delay > 0) ? (delay + right_delay) / 2 : right_delay;
-            }
-            if (delay <= 0) delay = 10; // 100ms default
-
-            // For smooth scrolling with slower frame rates
-            int delay_us = delay * 10000;
-            int scroll_interval_us = 8000;
-            int num_scroll_updates = delay_us / scroll_interval_us;
-            
-            if (num_scroll_updates > 1) {
-                for (int i = 0; i < num_scroll_updates && !interrupt_received; ++i) {
-                    usleep(scroll_interval_us);
-                    
-                    // Update scroll position
-                    scroll_offset--;
-                    if (scroll_offset < -fact_width) {
-                        scroll_offset = MATRIX_WIDTH;
-                    }
-                    
-                    // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
-                    for (int y = 20; y < MATRIX_HEIGHT; ++y) {
-                        for (int x = 0; x < MATRIX_WIDTH; ++x) {
-                            offscreen_canvas->SetPixel(x, y, 0, 0, 0);
-                        }
-                    }
-                    DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
-                    offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
-                }
-            } else {
-                usleep(delay_us);
-                scroll_offset--;
-                if (scroll_offset < -fact_width) {
-                    scroll_offset = MATRIX_WIDTH;
-                }
-            }
+  while (!interrupt_received) {
+    for (size_t frame = 0; frame < max_frames; ++frame) {
+      if (interrupt_received) break;
+      
+      time_t now = time(nullptr);
+      // Check brightness only every 60 seconds
+      if (now - last_brightness_check >= 60) {
+        int brightness = IsDimHoursEST() ? 10 : 100;
+        if (brightness != last_brightness) {
+          matrix->SetBrightness(brightness);
+          last_brightness = brightness;
         }
+        last_brightness_check = now;
+      }
+
+      // --- Time ---
+      time_t rawtime;
+      struct tm *timeinfo;
+      char time_buffer[16];
+      time(&rawtime);
+      timeinfo = localtime(&rawtime);
+      strftime(time_buffer, sizeof(time_buffer), "%H:%M", timeinfo);
+      std::string current_time_str(time_buffer);
+
+      // --- Fact ---
+      std::string current_fact_text = GetCurrentFact();
+
+      // --- Fact scroll reset if changed ---
+      if (current_fact_text != last_fact_text) {
+        last_fact_text = current_fact_text;
+        fact_width = GetStringWidth(fact_font, current_fact_text);
+        scroll_offset = MATRIX_WIDTH;
+      }
+
+      // --- Only redraw if something changed ---
+      if (current_time_str != last_time_str ||
+        current_fact_text != last_fact_text ||
+        scroll_offset != last_scroll_offset) {
+        offscreen_canvas->Clear();
+        const Magick::Image &left_frame = left_images[frame % left_images.size()];
+        CopyImageToCanvas(left_frame, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
+        const Magick::Image &right_frame = right_images[frame % right_images.size()];
+        CopyImageToCanvas(right_frame, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
+        DrawClock(offscreen_canvas, font);
+        DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
+        offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
+
+        last_time_str = current_time_str;
+        last_scroll_offset = scroll_offset;
+      }
+
+      // --- Scroll update ---
+      scroll_offset--;
+      if (scroll_offset < -fact_width) {
+        scroll_offset = MATRIX_WIDTH;
+      }
+
+      // --- Frame delay ---
+      int delay = 0;
+      if (frame < left_images.size()) {
+        delay = left_images[frame].animationDelay();
+      }
+      if (frame < right_images.size()) {
+        int right_delay = right_images[frame].animationDelay();
+        delay = (delay > 0) ? (delay + right_delay) / 2 : right_delay;
+      }
+      if (delay <= 0) delay = 10; // 100ms default
+
+      usleep(delay * 10000);
     }
+  }
 }
 
 int usage(const char *progname) {
