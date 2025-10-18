@@ -413,8 +413,8 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
             last_time_str = current_time_str;
         }
         
-        // Always clear and redraw ONLY the scrolling text area
-        for (int y = 26; y < MATRIX_HEIGHT; ++y) {
+        // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
+        for (int y = 20; y < MATRIX_HEIGHT; ++y) {
             for (int x = 0; x < MATRIX_WIDTH; ++x) {
                 offscreen_canvas->SetPixel(x, y, 0, 0, 0);
             }
@@ -506,13 +506,13 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
                 last_time_str = current_time_str;
             }
             
-            // Always clear and redraw ONLY the scrolling text area
-            for (int y = 26; y < MATRIX_HEIGHT; ++y) {
+            // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
+            for (int y = 20; y < MATRIX_HEIGHT; ++y) {
                 for (int x = 0; x < MATRIX_WIDTH; ++x) {
                     offscreen_canvas->SetPixel(x, y, 0, 0, 0);
                 }
             }
-            
+
             // Draw scrolling fact
             DrawFactText(offscreen_canvas, fact_font, current_fact_text, scroll_offset);
             
@@ -545,8 +545,8 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
                         scroll_offset = MATRIX_WIDTH;
                     }
                     
-                    // Clear and redraw only scrolling area
-                    for (int y = 26; y < MATRIX_HEIGHT; ++y) {
+                    // Always clear and redraw ONLY the scrolling text area (clear from row 22 to be safe)
+                    for (int y = 20; y < MATRIX_HEIGHT; ++y) {
                         for (int x = 0; x < MATRIX_WIDTH; ++x) {
                             offscreen_canvas->SetPixel(x, y, 0, 0, 0);
                         }
