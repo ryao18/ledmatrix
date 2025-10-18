@@ -123,6 +123,7 @@ std::string FetchOrLoadFactOfTheDay() {
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+  curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
 
   res = curl_easy_perform(curl);
   curl_easy_cleanup(curl);
