@@ -120,7 +120,8 @@ std::string FetchOrLoadFactOfTheDay() {
   curl_easy_setopt(curl, CURLOPT_URL, "https://uselessfacts.jsph.pl/api/v2/facts/today");
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "LED-Matrix-Facts/1.0");
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,30L);  // 30 second connect timeout
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
   curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
