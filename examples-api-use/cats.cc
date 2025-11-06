@@ -184,7 +184,7 @@ std::string FetchOrLoadFactOfTheDay() {
   return fact_text;
 }
 
-std::string FetchFactWithRetry(int max_retries = 6, int wait_seconds = 10) {
+std::string FetchFactWithRetry(int max_retries = 5, int wait_seconds = 10) {
     for (int attempt = 1; attempt <= max_retries; attempt++) {
         std::string fact = FetchOrLoadFactOfTheDay();  // your existing function
         if (fact.rfind("Today's fact:", 0) == 0) { 
@@ -200,41 +200,37 @@ std::string FetchFactWithRetry(int max_retries = 6, int wait_seconds = 10) {
 
 // Background thread function to check for new day and update fact
 void FactUpdateThread() {
-  std::string last_date = "";
-  
-  while (!should_stop_fact_thread) {
-    try {
-      std::string current_date = GetTodayDateLocal();
-      
-      // Check if it's a new day
-      if (current_date != last_date) {
-        printf("New day detected: %s (was: %s)\n", current_date.c_str(), last_date.c_str());
-        
-        std::string new_fact = FetchFactWithRetry(6, 10);
-
-        if (!new_fact.empty() && new_fact != "Could not fetch today's fact" && 
-            new_fact != "Error parsing today's fact" && new_fact != "Today's fact not found in response") {
-          
-          // Thread-safe update of the current fact
-          {
-            std::lock_guard<std::mutex> lock(fact_mutex);
-            current_fact = new_fact;
-          }
-          
-          printf("Today's fact loaded for %s: %s\n", current_date.c_str(), new_fact.c_str());
-        } else {
-          printf("Failed to fetch today's fact, keeping current one\n");
+    std::string last_date = "";
+    
+    while (!should_stop_fact_thread) {
+        try {
+            std::string current_date = GetTodayDateLocal();
+            time_t now = std::time(nullptr);
+            struct tm *timeinfo = localtime(&now);
+            int current_hour = timeinfo->tm_hour;
+            
+            // Check at 12:00 PM and 12:00 AM
+            if ((current_date != last_date) || 
+                (current_hour == 12 && timeinfo->tm_min < 30)) {  // Check around noon
+                
+                printf("Checking for new fact at %02d:%02d\n", 
+                       timeinfo->tm_hour, timeinfo->tm_min);
+                
+                std::string new_fact = FetchFactWithRetry(3, 30);  // Reduced retries, longer wait
+                
+                if (new_fact != "Could not fetch fact after retries") {
+                    std::lock_guard<std::mutex> lock(fact_mutex);
+                    current_fact = new_fact;
+                    last_date = current_date;
+                }
+            }
+        } catch (const std::exception& e) {
+            printf("Exception in fact update: %s\n", e.what());
         }
         
-        last_date = current_date;
-      }
-    } catch (const std::exception& e) {
-      printf("Exception in fact update: %s\n", e.what());
+        // Check every 8 hours
+        std::this_thread::sleep_for(std::chrono::hours(8));
     }
-    
-    // Check every 30 minutes if it's a new day
-    std::this_thread::sleep_for(std::chrono::minutes(30));
-  }
 }
 
 // Thread-safe function to get current fact
