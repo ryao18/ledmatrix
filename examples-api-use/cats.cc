@@ -409,7 +409,7 @@ void ShowDualStaticImagesWithClock(const Magick::Image &left_image,
         CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
         
         // Clear clock area before redrawing to prevent digit overlap
-        for (int y = 5; y < 21; ++y) {
+        for (int y = 5; y < 23; ++y) {
             for (int x = CLOCK_X; x < CLOCK_X + CLOCK_WIDTH; ++x) {
                 offscreen_canvas->SetPixel(x, y, 0, 0, 0);
             }
@@ -508,7 +508,7 @@ void ShowDualAnimatedImagesWithClock(const ImageVector &left_images,
       CopyImageToCanvas(right_frame, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
 
       // Clear clock area before redrawing to prevent digit overlap
-      for (int y = 5; y < 21; ++y) {
+      for (int y = 5; y < 23; ++y) {
         for (int x = CLOCK_X; x < CLOCK_X + CLOCK_WIDTH; ++x) {
           offscreen_canvas->SetPixel(x, y, 0, 0, 0);
         }
