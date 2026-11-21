@@ -162,13 +162,13 @@ static CatsMatrix::Options DefaultMatrixOptions() {
 
 constexpr auto PORTRAIT_DURATION = std::chrono::seconds(8);
 constexpr auto SCROLL_PAUSE = std::chrono::seconds(1);
-constexpr auto SCROLL_STEP = std::chrono::microseconds(29'400);
+constexpr auto SCROLL_STEP = std::chrono::microseconds(32'700);
 constexpr int SCROLL_GAP = 12;
 constexpr size_t MAX_FACT_RESPONSE_BYTES = 16 * 1024;
 constexpr char FACT_PREFIX[] = "Today's fact: ";
 
 // Global variables for fact management
-std::string current_fact = "Waiting for network... fact loading in background";
+std::string current_fact;
 std::mutex fact_mutex;
 std::atomic<bool> should_stop_fact_thread{false};
 std::condition_variable fact_stop_cv;
@@ -443,9 +443,10 @@ static void FactUpdateThread(std::string checked_day, DailyFact displayed) {
 }
 
 // Thread-safe function to get current fact
-std::string GetCurrentFact() {
+static std::string GetFactTickerText() {
   std::lock_guard<std::mutex> lock(fact_mutex);
-  return current_fact;
+  if (current_fact.empty()) return "Waiting for network... fact loading in background";
+  return FACT_PREFIX + current_fact;
 }
 
 // Pre-render a GraphicsMagick image to a flat pixel array.
@@ -641,7 +642,7 @@ static bool ShowRotatingPortraits(const PreRenderedFrames &first, const PreRende
     }
 
     if (check_fact) {
-      std::string latest_fact = GetCurrentFact();
+      std::string latest_fact = GetFactTickerText();
       if (latest_fact != fact_text) {
         fact_text.swap(latest_fact);
         fact_strip.SetText(fact_font, fact_text);
