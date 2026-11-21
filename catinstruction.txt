@@ -10,7 +10,7 @@ cd ~/rpi-rgb-led-matrix/examples-api-use
 
 make clean && make cats
 
-sudo ./cats --led-rows=32 --led-cols=64 --led-brightness=50 ../img/oceansunroom_small.jpg ../img/fungus_small.png
+sudo ./cats --led-rows=32 --led-cols=64 ../img/ocean_portrait_blue.png ../img/fungus_small.png
 
 
 sudo nano /etc/systemd/system/cats-display.service

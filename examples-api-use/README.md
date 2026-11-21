@@ -1,3 +1,19 @@
+Previewing `cats.cc` on macOS
+----------------------------
+
+Install the build dependencies with Homebrew if needed.
+
+```sh
+brew install graphicsmagick jsoncpp sdl2
+```
+
+From the repository root, run `make preview` to compile `cats.cc` and open a
+live 64×32 preview with Ocean and Fungus. The portraits alternate every
+eight seconds, with the clock and date on the right and the daily fact along
+the bottom. Press Esc to close the window.
+To use other images, build with `make -C examples-api-use cats-preview` and run
+`./examples-api-use/cats-preview FIRST_IMAGE SECOND_IMAGE`.
+
 Running some demos
 ------------------
 Let's start by running some demos, then we can dive into code. The

@@ -11,6 +11,9 @@ CSHARP_LIB_DIR=bindings/c\#
 
 all : $(RGB_LIBRARY)
 
+preview:
+	$(MAKE) -C examples-api-use preview
+
 $(RGB_LIBRARY): FORCE
 	$(MAKE) -C $(RGB_LIBDIR)
 	$(MAKE) -C examples-api-use
@@ -32,4 +35,4 @@ install-python: build-python
 	$(MAKE) -C $(PYTHON_LIB_DIR) install
 
 FORCE:
-.PHONY: FORCE
+.PHONY: FORCE preview

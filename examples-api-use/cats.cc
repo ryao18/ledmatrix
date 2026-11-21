@@ -1,53 +1,126 @@
 // -*- mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; -*-
 //
-// Dual Image Display with Clock for LED Matrix
-// Displays two images side by side on a 64x32 LED matrix with time in middle
-// Left image occupies columns 0-17, right image occupies columns 46-63
-// Time display in middle gap (columns 18-45) - expanded for better readability
-// Random facts scroll at bottom - updates daily
+// Rotating portraits with a clock, date, and daily fact on a 64x32 LED matrix.
 //
 // Dependencies:
 //   sudo apt-get update
 //   sudo apt-get install libgraphicsmagick++-dev libwebp-dev libcurl4-openssl-dev libjsoncpp-dev -y
 
+#ifdef CATS_PREVIEW
+#include "cats-preview.h"
+#else
 #include "led-matrix.h"
+#endif
 #include "graphics.h"  // For text rendering
 
-#include <math.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <ctime>
-#include <cstring>
 #include <string>
-#include <iostream>
 #include <fstream>
 #include <chrono>
-#include <iomanip>
 #include <filesystem>
+#include <iterator>
+#include <memory>
+#include <sstream>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <utility>
+#include <vector>
 
 #include <exception>
 #include <Magick++.h>
-#include <magick/image.h>
 
 #include <curl/curl.h>
+#ifdef CATS_PREVIEW
+#include <json/json.h>
+using CatsMatrix = PreviewMatrix;
+using CatsFrame = PreviewMatrix::Frame;
+#else
 #include <jsoncpp/json/json.h>
+using CatsMatrix = rgb_matrix::RGBMatrix;
+using CatsFrame = rgb_matrix::FrameCanvas;
+#endif
+
+#ifndef CATS_FONT_DIR
+#define CATS_FONT_DIR "/opt/cats-display/fonts"
+#endif
 
 using rgb_matrix::Canvas;
-using rgb_matrix::RGBMatrix;
-using rgb_matrix::FrameCanvas;
 using rgb_matrix::Font;
 using rgb_matrix::Color;
 using rgb_matrix::DrawText;
 
-// Make sure we can exit gracefully when Ctrl-C is pressed.
-volatile bool interrupt_received = false;
-static void InterruptHandler(int signo) {
+using DisplayClock = std::chrono::steady_clock;
+
+// A pipe wakes the renderer from both the fact thread and the signal handler.
+// The descriptors stay open for the life of the process.
+static int display_wakeup[2];
+static std::atomic<bool> interrupt_received{false};
+static_assert(std::atomic<bool>::is_always_lock_free);
+
+static bool InitializeDisplayWakeup() {
+  if (pipe(display_wakeup) != 0) return false;
+  for (int &fd : display_wakeup) {
+    // The driver's daemon mode can replace standard I/O descriptors.
+    if (fd <= STDERR_FILENO) {
+      const int replacement = fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+      if (replacement < 0) return false;
+      close(fd);
+      fd = replacement;
+    }
+    if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0 ||
+        fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) return false;
+  }
+  return true;
+}
+
+static void WakeDisplay() {
+  const int saved_errno = errno;
+  const char byte = 0;
+  while (write(display_wakeup[1], &byte, 1) < 0 && errno == EINTR) {}
+  // A full pipe already has a wakeup pending.
+  errno = saved_errno;
+}
+
+static void InterruptHandler(int) {
   interrupt_received = true;
+  WakeDisplay();
+}
+
+enum class DisplayWake { NoNotification, Notification, Error };
+
+static DisplayWake WaitForDisplayUpdate(DisplayClock::time_point deadline) {
+  using namespace std::chrono;
+  const auto delay = ceil<milliseconds>(deadline - DisplayClock::now());
+  pollfd wakeup{display_wakeup[0], POLLIN, 0};
+  const int ready = poll(&wakeup, 1, std::max(delay, milliseconds::zero()).count());
+  if ((ready < 0 && errno != EINTR) || (wakeup.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+    if (ready < 0) perror("Could not wait for display update");
+    else fprintf(stderr, "Display wakeup pipe closed unexpectedly\n");
+    return DisplayWake::Error;
+  }
+  if (ready <= 0) return DisplayWake::NoNotification;
+
+  char pending[64];
+  ssize_t bytes;
+  do {
+    bytes = read(display_wakeup[0], pending, sizeof(pending));
+  } while (bytes > 0 || (bytes < 0 && errno == EINTR));
+  if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    return DisplayWake::Notification;
+  }
+  if (bytes < 0) perror("Could not read display update");
+  else fprintf(stderr, "Display wakeup pipe closed unexpectedly\n");
+  return DisplayWake::Error;
 }
 
 using ImageVector = std::vector<Magick::Image>;
@@ -56,7 +129,6 @@ using ImageVector = std::vector<Magick::Image>;
 // calls on every frame. Pixels are converted once at startup.
 struct Pixel {
   uint8_t r, g, b;
-  bool visible;
 };
 
 struct PreRenderedImage {
@@ -67,239 +139,313 @@ struct PreRenderedImage {
 
 using PreRenderedFrames = std::vector<PreRenderedImage>;
 
-// Configuration for dual image layout on 64x32 matrix
-const int MATRIX_WIDTH = 64;
-const int MATRIX_HEIGHT = 32;
-const int LEFT_IMAGE_WIDTH = 18;
-const int RIGHT_IMAGE_WIDTH = 18;
-const int LEFT_IMAGE_X = 0;
-const int RIGHT_IMAGE_X = 46;
-const int GAP_WIDTH = 28;
-const int CLOCK_X = 18;
-const int CLOCK_WIDTH = 28;
-const int IMAGE_HEIGHT = 21;
-const int IMAGE_Y = 1;
-const int WEATHER_Y = 28;
+constexpr int MATRIX_WIDTH = 64;
+constexpr int MATRIX_HEIGHT = 32;
+constexpr int PORTRAIT_X = 1;
+constexpr int PORTRAIT_Y = 1;
+constexpr int PORTRAIT_WIDTH = 32;
+constexpr int PORTRAIT_HEIGHT = 22;
+constexpr int CLOCK_X = PORTRAIT_WIDTH + 2;
+constexpr int CLOCK_WIDTH = MATRIX_WIDTH - CLOCK_X;
+constexpr int CLOCK_BASELINE = 13;
+constexpr int DATE_BASELINE = 21;
+constexpr int FACT_BASELINE = 31;
+
+#ifndef CATS_PREVIEW
+static CatsMatrix::Options DefaultMatrixOptions() {
+  CatsMatrix::Options options;
+  options.rows = MATRIX_HEIGHT;
+  options.cols = MATRIX_WIDTH;
+  return options;
+}
+#endif
+
+constexpr auto PORTRAIT_DURATION = std::chrono::seconds(8);
+constexpr auto SCROLL_PAUSE = std::chrono::seconds(1);
+constexpr auto SCROLL_STEP = std::chrono::milliseconds(25);
+constexpr int SCROLL_GAP = 12;
+constexpr size_t MAX_FACT_RESPONSE_BYTES = 16 * 1024;
+constexpr char FACT_PREFIX[] = "Today's fact: ";
 
 // Global variables for fact management
-std::string current_fact = "Loading today's fact...";
+std::string current_fact = "Waiting for network... fact loading in background";
 std::mutex fact_mutex;
 std::atomic<bool> should_stop_fact_thread{false};
 std::condition_variable fact_stop_cv;
 std::mutex fact_stop_mutex;
 
-// CURL callback function
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
-    ((std::string*)userp)->append((char*)contents, size * nmemb);
-    return size * nmemb;
+static size_t WriteFactResponse(char *contents, size_t size, size_t count, void *user_data) {
+  if (size == 0 || count == 0) return 0;
+  auto &response = *static_cast<std::string *>(user_data);
+  if (response.size() >= MAX_FACT_RESPONSE_BYTES ||
+      count > (MAX_FACT_RESPONSE_BYTES - response.size()) / size) {
+    fprintf(stderr, "Daily fact response exceeded %zu bytes\n", MAX_FACT_RESPONSE_BYTES);
+    return 0;
+  }
+
+  const size_t bytes = size * count;
+  response.append(contents, bytes);
+  return bytes;
 }
 
-// Get today's date in Eastern timezone
-std::string GetTodayDateLocal() {
-  std::time_t now = std::time(nullptr);
-  std::tm *local = std::localtime(&now);  // Uses system timezone (should be Eastern for you)
-  char buf[11];
-  std::strftime(buf, sizeof(buf), "%Y-%m-%d", local);
-  return std::string(buf);
+static int AbortFactRequest(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  return should_stop_fact_thread.load() ? 1 : 0;
 }
 
-// Fetch or load today's fact (with caching)
-std::string FetchOrLoadFactOfTheDay() {
-  std::string today = GetTodayDateLocal();
-  std::string cache_dir = "/tmp/cats-cache";
-  std::filesystem::create_directories(cache_dir);
-  std::string cache_path = cache_dir + "/" + today + ".txt";
+struct DailyFact {
+  std::string day;
+  std::string id;
+  std::string text;
+};
 
-  // Try to load from cache first
-  std::ifstream infile(cache_path);
-  if (infile.good()) {
-    std::string cached_fact((std::istreambuf_iterator<char>(infile)),
-                             std::istreambuf_iterator<char>());
-    if (!cached_fact.empty()) {
-      printf("Loaded cached fact for %s\n", today.c_str());
-      return cached_fact;
+static const std::filesystem::path FACT_CACHE_DIR = "/tmp/cats-cache";
+
+static std::string LocalDate(std::time_t now) {
+  std::tm local;
+  localtime_r(&now, &local);
+  char day[11];
+  std::strftime(day, sizeof(day), "%Y-%m-%d", &local);
+  return day;
+}
+
+static std::chrono::system_clock::time_point NextLocalMidnight(std::time_t now) {
+  std::tm local;
+  localtime_r(&now, &local);
+  ++local.tm_mday;
+  local.tm_hour = local.tm_min = local.tm_sec = 0;
+  local.tm_isdst = -1;
+  return std::chrono::system_clock::from_time_t(std::mktime(&local));
+}
+
+static bool IsValidUtf8Text(const std::string &text) {
+  size_t position = 0;
+  while (position < text.size()) {
+    const auto first = static_cast<unsigned char>(text[position++]);
+    // DrawText takes a null-terminated string.
+    if (first == 0) return false;
+    if (first < 0x80) continue;
+    if (first < 0xc2 || first > 0xf4) return false;
+
+    const size_t continuation_count = first < 0xe0 ? 1 : first < 0xf0 ? 2 : 3;
+    if (text.size() - position < continuation_count) return false;
+    const auto second = static_cast<unsigned char>(text[position]);
+    // These bounds reject overlong forms, surrogates, and values above U+10FFFF.
+    if ((first == 0xe0 && second < 0xa0) || (first == 0xed && second > 0x9f) ||
+        (first == 0xf0 && second < 0x90) || (first == 0xf4 && second > 0x8f)) {
+      return false;
+    }
+    for (size_t i = 0; i < continuation_count; ++i) {
+      if ((static_cast<unsigned char>(text[position++]) & 0xc0) != 0x80) return false;
     }
   }
+  return true;
+}
 
-  // If not cached or cache is empty, fetch from API
-  printf("Fetching today's fact from API for %s...\n", today.c_str());
+static std::string CleanFactText(std::string text) {
+  if (!IsValidUtf8Text(text)) {
+    fprintf(stderr, "Daily fact contained malformed UTF-8 or an embedded NUL\n");
+    return {};
+  }
+  std::replace(text.begin(), text.end(), '\n', ' ');
+  std::replace(text.begin(), text.end(), '\r', ' ');
+  for (size_t pos = text.find("  "); pos != std::string::npos; pos = text.find("  ", pos)) {
+    text.erase(pos, 1);
+  }
+  text.erase(0, text.find_first_not_of(' '));
+  if (!text.empty()) text.erase(text.find_last_not_of(' ') + 1);
+  if (text.size() > 150) {
+    size_t end = 147;
+    while ((static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+    text = text.substr(0, end) + "...";
+  }
+  return text;
+}
 
-  CURL *curl;
-  CURLcode res;
-  std::string readBuffer;
+static DailyFact ReadFactJson(std::istream &input, const std::string &day) {
+  try {
+    Json::CharReaderBuilder builder;
+    Json::Value root;
+    if (!Json::parseFromStream(builder, input, &root, nullptr) || !root.isObject() ||
+        !root["id"].isString() || !root["text"].isString()) {
+      return {};
+    }
 
-  curl = curl_easy_init();
-  if (!curl) {
-    std::cerr << "Failed to initialize CURL" << std::endl;
-    return "Could not fetch fact";
+    std::string id = root["id"].asString();
+    if (id.empty() || !IsValidUtf8Text(id)) return {};
+    std::string text = CleanFactText(root["text"].asString());
+    return text.empty() ? DailyFact{} : DailyFact{day, std::move(id), std::move(text)};
+  } catch (const Json::Exception &error) {
+    fprintf(stderr, "Could not parse daily fact JSON: %s\n", error.what());
+    return {};
+  }
+}
+
+static DailyFact LoadLatestCachedFact(const std::string &today) {
+  namespace fs = std::filesystem;
+  DailyFact latest;
+  std::error_code error;
+  for (fs::directory_iterator entry(FACT_CACHE_DIR, error), end;
+       !error && entry != end; entry.increment(error)) {
+    const fs::path &path = entry->path();
+    const std::string day = path.stem().string();
+    const bool legacy = path.extension() == ".txt";
+    if ((!legacy && path.extension() != ".json") ||
+        day.size() != 10 || day[4] != '-' || day[7] != '-' ||
+        day > today || day < latest.day || (legacy && day == latest.day)) {
+      continue;
+    }
+
+    std::error_code status_error;
+    if (!entry->is_regular_file(status_error)) continue;
+    std::ifstream input(path);
+    if (!input) continue;
+
+    DailyFact fact;
+    if (legacy) {
+      std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+      if (text.rfind(FACT_PREFIX, 0) == 0) text.erase(0, sizeof(FACT_PREFIX) - 1);
+      fact = {day, {}, CleanFactText(std::move(text))};
+    } else {
+      fact = ReadFactJson(input, day);
+    }
+    if (!fact.text.empty()) latest = std::move(fact);
+  }
+  return latest;
+}
+
+static void CacheFact(const DailyFact &fact) {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  fs::create_directories(FACT_CACHE_DIR, error);
+  const fs::path path = FACT_CACHE_DIR / (fact.day + ".json");
+  Json::Value value;
+  value["id"] = fact.id;
+  value["text"] = fact.text;
+  Json::StreamWriterBuilder builder;
+  builder["indentation"] = "";
+  const std::string json = Json::writeString(builder, value);
+
+  // Write to a separate file so another reader only sees complete entries.
+  std::string temp_path = path.string() + ".XXXXXX";
+  const int descriptor = error ? -1 : mkstemp(temp_path.data());
+  if (descriptor != -1) {
+    FILE *output = fdopen(descriptor, "w");
+    if (output) {
+      const bool written = fwrite(json.data(), 1, json.size(), output) == json.size();
+      const bool closed = fclose(output) == 0;
+      if (written && closed) {
+        fs::rename(temp_path, path, error);
+        if (!error) {
+          printf("Cached daily fact for %s\n", fact.day.c_str());
+          return;
+        }
+      }
+    } else {
+      close(descriptor);
+    }
+    fs::remove(temp_path, error);
+  }
+  fprintf(stderr, "Could not cache the daily fact for %s\n", fact.day.c_str());
+}
+
+static DailyFact FetchDailyFact(const std::string &day) {
+  printf("Fetching the daily fact for %s\n", day.c_str());
+  std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> request(curl_easy_init(), curl_easy_cleanup);
+  if (!request) {
+    fprintf(stderr, "Failed to initialize CURL\n");
+    return {};
   }
 
-  // Use today's fact endpoint for daily facts
+  CURL *curl = request.get();
+  std::string response;
   curl_easy_setopt(curl, CURLOPT_URL, "https://uselessfacts.jsph.pl/api/v2/facts/today");
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "LED-Matrix-Facts/1.0");
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, AbortFactRequest);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteFactResponse);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
   curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
 
-  res = curl_easy_perform(curl);
-  curl_easy_cleanup(curl);
-
-  if (res != CURLE_OK) {
-    std::cerr << "CURL error: " << curl_easy_strerror(res) << std::endl;
-    return "Could not fetch today's fact";
+  const CURLcode result = curl_easy_perform(curl);
+  if (should_stop_fact_thread) return {};
+  if (result != CURLE_OK) {
+    fprintf(stderr, "Could not fetch the daily fact: %s\n", curl_easy_strerror(result));
+    return {};
+  }
+  if (!IsValidUtf8Text(response)) {
+    fprintf(stderr, "Daily fact response contained malformed UTF-8 or an embedded NUL\n");
+    return {};
   }
 
-  // Parse JSON
-  Json::CharReaderBuilder builder;
-  Json::Value root;
-  std::string errs;
-  std::istringstream s(readBuffer);
-
-  if (!Json::parseFromStream(builder, s, &root, &errs)) {
-    std::cerr << "JSON parse error: " << errs << std::endl;
-    return "Error parsing today's fact";
-  }
-
-  if (!root.isMember("text")) {
-    return "Today's fact not found in response";
-  }
-
-  std::string fact_text = root["text"].asString();
-
-  // Clean up the fact text for LED display
-  // Remove excessive whitespace and limit length
-  std::replace(fact_text.begin(), fact_text.end(), '\n', ' ');
-  std::replace(fact_text.begin(), fact_text.end(), '\r', ' ');
-
-  // Remove multiple spaces
-  std::string::size_type pos = 0;
-  while ((pos = fact_text.find("  ", pos)) != std::string::npos) {
-    fact_text.replace(pos, 2, " ");
-  }
-
-  // Trim and limit length for scrolling display
-  fact_text.erase(0, fact_text.find_first_not_of(" "));
-  fact_text.erase(fact_text.find_last_not_of(" ") + 1);
-
-  if (fact_text.length() > 150) {
-    fact_text = fact_text.substr(0, 147) + "...";
-  }
-
-  // Add prefix to make it clear it's a fact
-  fact_text = "Today's fact: " + fact_text;
-
-  // Save to cache
-  std::ofstream outfile(cache_path);
-  if (outfile.good()) {
-    outfile << fact_text;
-    outfile.close();
-    printf("Cached today's fact for %s\n", today.c_str());
-  }
-
-  return fact_text;
+  std::istringstream input(response);
+  DailyFact fact = ReadFactJson(input, day);
+  if (fact.text.empty()) fprintf(stderr, "The daily fact response had no valid ID and text.\n");
+  return fact;
 }
 
-std::string FetchFactWithRetry(int max_retries = 5, int wait_seconds = 10) {
-    for (int attempt = 1; attempt <= max_retries; attempt++) {
-        if (should_stop_fact_thread) return "Shutting down";
-        std::string fact = FetchOrLoadFactOfTheDay();
-        if (fact.rfind("Today's fact:", 0) == 0) {
-            return fact; // valid fact
-        }
-        std::cerr << "Attempt " << attempt << " failed. Retrying in "
-                  << wait_seconds << " seconds..." << std::endl;
-        // Use condition variable so we can be woken for shutdown
-        std::unique_lock<std::mutex> lock(fact_stop_mutex);
-        if (fact_stop_cv.wait_for(lock, std::chrono::seconds(wait_seconds),
-                                  []{ return should_stop_fact_thread.load(); })) {
-            return "Shutting down";
-        }
-    }
-
-    return "Could not fetch fact after retries"; // final fallback
+static void PublishFact(const DailyFact &fact) {
+  {
+    std::lock_guard<std::mutex> lock(fact_mutex);
+    current_fact = fact.text;
+  }
+  WakeDisplay();
 }
 
-// Background thread function to check for new day and update fact
-void FactUpdateThread() {
-    std::string last_date = "";
+static void FactUpdateThread(std::string checked_day, DailyFact displayed) {
+  using Clock = std::chrono::system_clock;
+  constexpr int retry_minutes[] = {1, 5, 15, 60};
+  size_t retry_index = 0;
 
-    while (!should_stop_fact_thread) {
-        try {
-            std::string current_date = GetTodayDateLocal();
-            time_t now = std::time(nullptr);
-            struct tm *timeinfo = localtime(&now);
-            int current_hour = timeinfo->tm_hour;
+  while (!should_stop_fact_thread) {
+    const std::time_t now = std::time(nullptr);
+    const std::string today = LocalDate(now);
+    auto wake_at = NextLocalMidnight(now);
 
-            // Check at 12:00 PM and 12:00 AM
-            if ((current_date != last_date) ||
-                (current_hour == 12 && timeinfo->tm_min < 30)) {
-
-                printf("Checking for new fact at %02d:%02d\n",
-                       timeinfo->tm_hour, timeinfo->tm_min);
-
-                std::string new_fact = FetchFactWithRetry(3, 30);
-
-                if (new_fact != "Could not fetch fact after retries" &&
-                    new_fact != "Shutting down") {
-                    std::lock_guard<std::mutex> lock(fact_mutex);
-                    current_fact = new_fact;
-                    last_date = current_date;
-                }
-            }
-        } catch (const std::exception& e) {
-            printf("Exception in fact update: %s\n", e.what());
-        }
-
-        // Sleep with condition variable so we can wake up for clean shutdown
-        std::unique_lock<std::mutex> lock(fact_stop_mutex);
-        fact_stop_cv.wait_for(lock, std::chrono::hours(8),
-                              []{ return should_stop_fact_thread.load(); });
+    if (today != checked_day) {
+      checked_day = today;
+      retry_index = 0;
+      auto cached = LoadLatestCachedFact(today);
+      if (!cached.text.empty() &&
+          (cached.day > displayed.day || displayed.day > today)) {
+        displayed = std::move(cached);
+        PublishFact(displayed);
+        printf("Loaded cached fact for %s\n", displayed.day.c_str());
+      }
     }
+
+    if (displayed.day != today) {
+      DailyFact fresh = FetchDailyFact(today);
+      if (should_stop_fact_thread) return;
+      if (LocalDate(std::time(nullptr)) != today) continue;
+
+      const bool matches_displayed = displayed.id.empty()
+          ? fresh.text == displayed.text : fresh.id == displayed.id;
+      if (!fresh.text.empty() && !matches_displayed) {
+        displayed = std::move(fresh);
+        PublishFact(displayed);
+        CacheFact(displayed);
+      } else {
+        const int minutes = retry_minutes[retry_index];
+        printf("Daily fact is unavailable or unchanged. Retrying in %d minute(s).\n", minutes);
+        wake_at = std::min(wake_at, Clock::now() + std::chrono::minutes(minutes));
+        retry_index = std::min(retry_index + 1, std::size(retry_minutes) - 1);
+      }
+    }
+
+    std::unique_lock<std::mutex> lock(fact_stop_mutex);
+    fact_stop_cv.wait_until(lock, wake_at, []{ return should_stop_fact_thread.load(); });
+  }
 }
 
 // Thread-safe function to get current fact
 std::string GetCurrentFact() {
   std::lock_guard<std::mutex> lock(fact_mutex);
   return current_fact;
-}
-
-// Load and scale a single image to specified dimensions
-static ImageVector LoadImageAndScaleImage(const char *filename,
-                                          int target_width,
-                                          int target_height) {
-  ImageVector result;
-
-  ImageVector frames;
-  try {
-    readImages(&frames, filename);
-  } catch (std::exception &e) {
-    if (e.what())
-      fprintf(stderr, "Error loading %s: %s\n", filename, e.what());
-    return result;
-  }
-
-  if (frames.empty()) {
-    fprintf(stderr, "No image found in %s\n", filename);
-    return result;
-  }
-
-  // Animated images have partial frames that need to be put together
-  if (frames.size() > 1) {
-    Magick::coalesceImages(&result, frames.begin(), frames.end());
-  } else {
-    result.push_back(frames[0]); // just a single still image.
-  }
-
-  for (Magick::Image &image : result) {
-    image.scale(Magick::Geometry(target_width, target_height));
-  }
-
-  printf("Loaded %s: %zu frame(s), scaled to %dx%d\n",
-         filename, result.size(), target_width, target_height);
-  return result;
 }
 
 // Pre-render a GraphicsMagick image to a flat pixel array.
@@ -311,263 +457,270 @@ static PreRenderedImage PreRenderImage(const Magick::Image &image) {
   result.height = image.rows();
   result.animation_delay = image.animationDelay();
   result.pixels.resize(result.width * result.height);
+  const bool has_alpha = image.matte();
   for (int y = 0; y < result.height; ++y) {
     for (int x = 0; x < result.width; ++x) {
-      const Magick::Color &c = image.pixelColor(x, y);
+      const Magick::Color c = image.pixelColor(x, y);
+      const int opacity = has_alpha ? 255 - ScaleQuantumToChar(c.alphaQuantum()) : 255;
       Pixel &p = result.pixels[y * result.width + x];
-      p.r = ScaleQuantumToChar(c.redQuantum());
-      p.g = ScaleQuantumToChar(c.greenQuantum());
-      p.b = ScaleQuantumToChar(c.blueQuantum());
-      p.visible = (c.alphaQuantum() < 256);
+      p.r = (ScaleQuantumToChar(c.redQuantum()) * opacity + 127) / 255;
+      p.g = (ScaleQuantumToChar(c.greenQuantum()) * opacity + 127) / 255;
+      p.b = (ScaleQuantumToChar(c.blueQuantum()) * opacity + 127) / 255;
     }
   }
   return result;
 }
 
-static PreRenderedFrames PreRenderAllFrames(const ImageVector &images) {
+static PreRenderedFrames LoadPortrait(const char *filename) {
   PreRenderedFrames result;
-  result.reserve(images.size());
-  for (const auto &image : images) {
-    result.push_back(PreRenderImage(image));
+  try {
+    ImageVector frames;
+    readImages(&frames, filename);
+
+    // Animated files can store partial frames. Assemble them before cropping.
+    if (frames.size() > 1) {
+      ImageVector coalesced;
+      Magick::coalesceImages(&coalesced, frames.begin(), frames.end());
+      frames.swap(coalesced);
+    }
+
+    Magick::Geometry size(PORTRAIT_WIDTH, PORTRAIT_HEIGHT);
+    size.aspect(true);
+    result.reserve(frames.size());
+    for (Magick::Image &frame : frames) {
+      const size_t width = frame.columns();
+      const size_t height = frame.rows();
+      const size_t crop_width = std::min(width, std::max<size_t>(1, height * PORTRAIT_WIDTH / PORTRAIT_HEIGHT));
+      const size_t crop_height = std::min(height, std::max<size_t>(1, width * PORTRAIT_HEIGHT / PORTRAIT_WIDTH));
+      frame.crop(Magick::Geometry(crop_width, crop_height,
+                                  (width - crop_width) / 2, (height - crop_height) / 2));
+      frame.repage();
+      frame.resize(size, Magick::LanczosFilter);
+      result.push_back(PreRenderImage(frame));
+    }
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error loading %s: %s\n", filename, e.what());
+    return {};
   }
+  printf("Loaded %s: %zu frame(s), cropped to %dx%d\n",
+         filename, result.size(), PORTRAIT_WIDTH, PORTRAIT_HEIGHT);
   return result;
 }
 
-// Copy a pre-rendered image to a Canvas at specified position
-void CopyImageToCanvas(const PreRenderedImage &image, Canvas *canvas,
-                       int offset_x, int offset_y) {
-  for (int y = 0; y < image.height && y + offset_y < IMAGE_HEIGHT + IMAGE_Y; ++y) {
+static void DrawPortrait(const PreRenderedImage &image, Canvas *canvas) {
+  for (int y = 0; y < image.height; ++y) {
     for (int x = 0; x < image.width; ++x) {
       const Pixel &p = image.pixels[y * image.width + x];
-      if (p.visible) {
-        canvas->SetPixel(x + offset_x, y + offset_y, p.r, p.g, p.b);
+      canvas->SetPixel(PORTRAIT_X + x, PORTRAIT_Y + y, p.r, p.g, p.b);
+    }
+  }
+}
+
+static int BrightnessForLocalTime(const std::tm &local) {
+  constexpr int day_start = 8 * 60;
+  constexpr int night_start = 23 * 60 + 30;
+  const int minutes = local.tm_hour * 60 + local.tm_min;
+  return minutes < day_start || minutes >= night_start ? 10 : 100;
+}
+
+static void DrawCenteredText(Canvas *canvas, const Font &font, int baseline,
+                             Color color, const char *text) {
+  int width = 0;
+  for (const char *letter = text; *letter; ++letter) {
+    width += font.CharacterWidth(static_cast<uint8_t>(*letter));
+  }
+  const int x = CLOCK_X + (CLOCK_WIDTH - width) / 2;
+  DrawText(canvas, font, x, baseline, color, text);
+}
+
+static void DrawClock(Canvas *canvas, const Font &clock_font, const Font &date_font,
+                      const std::tm &local) {
+  char time_text[16];
+  char date_text[16];
+  strftime(time_text, sizeof(time_text), "%H:%M", &local);
+  strftime(date_text, sizeof(date_text), "%-m/%-d", &local);
+
+  DrawCenteredText(canvas, clock_font, CLOCK_BASELINE, Color(255, 255, 255), time_text);
+  DrawCenteredText(canvas, date_font, DATE_BASELINE, Color(180, 180, 180), date_text);
+}
+
+// Rasterize each fact once. A render step only visits pixels inside the panel.
+class FactStrip final : public Canvas {
+public:
+  void SetText(const Font &font, const std::string &text) {
+    // DrawText also measures text. Start beyond an empty canvas to measure
+    // with the same UTF-8 decoding and glyph fallback used for rendering.
+    width_ = 0;
+    width_ = DrawText(this, font, 1, FACT_BASELINE - TOP, COLOR, text.c_str());
+    first_ink_column_ = width_;
+    pixels_.assign(width_ * height(), 0);
+    DrawText(this, font, 0, FACT_BASELINE - TOP, COLOR, text.c_str());
+  }
+
+  void Draw(Canvas *canvas, int offset) const {
+    offset -= first_ink_column_;
+    const int left = std::max(first_ink_column_, -offset);
+    const int right = std::min(width_, MATRIX_WIDTH - offset);
+    for (int y = 0; y < height(); ++y) {
+      for (int x = left; x < right; ++x) {
+        if (pixels_[y * width_ + x]) {
+          canvas->SetPixel(x + offset, y + TOP, COLOR.r, COLOR.g, COLOR.b);
+        }
       }
     }
   }
-}
 
-// Helper function to determine if we are in the "dim" hours (EST)
-bool IsDimHoursEST() {
-  std::time_t now = std::time(nullptr);
-  std::tm *local = std::localtime(&now);  // Uses system timezone
+  int width() const override { return width_; }
+  int height() const override { return MATRIX_HEIGHT - TOP; }
+  int content_width() const { return width_ - first_ink_column_; }
 
-  int hour = local->tm_hour;
-  int min = local->tm_min;
-  // Dim between 23:30 and 8:00 EST
-  if ((hour == 23 && min >= 30) || (hour < 8)) return true;
-  return false;
-}
-
-// Draw current time in the middle gap with better spacing
-void DrawClock(Canvas *canvas, const Font &font) {
-  time_t rawtime;
-  struct tm *timeinfo;
-  char time_buffer[16];
-  char date_buffer[16];
-
-  time(&rawtime);
-  timeinfo = localtime(&rawtime);
-
-  // Format time as HH:MM (24-hour format)
-  strftime(time_buffer, sizeof(time_buffer), "%H:%M", timeinfo);
-  // Format date as M/D (no leading zeros)
-  strftime(date_buffer, sizeof(date_buffer), "%-m/%-d", timeinfo);
-
-  // Colors for time display
-  Color time_color(255, 255, 255);    // White for time
-  Color date_color(180, 180, 180);    // Light gray for date
-
-  // Calculate better centering with expanded gap
-  int time_len = strlen(time_buffer);
-  int date_len = strlen(date_buffer);
-
-  // Center time in the expanded gap (approximate character width of 4 pixels)
-  int time_x = CLOCK_X + (CLOCK_WIDTH - time_len * 4) / 2 - 2;
-  int date_x = CLOCK_X + (CLOCK_WIDTH - date_len * 4) / 2 - 2;
-
-  // Draw time higher up to make use of extra space
-  DrawText(canvas, font, time_x, 10, time_color, time_buffer);
-
-  // Draw date below time with more spacing
-  DrawText(canvas, font, date_x, 18, date_color, date_buffer);
-}
-
-// Draw scrolling fact text at bottom
-void DrawFactText(Canvas *canvas, const Font &font, const std::string &fact_text, int scroll_offset) {
-  Color fact_color(100, 255, 100);  // Green for facts
-
-  // Draw fact text with scrolling offset
-  DrawText(canvas, font, scroll_offset, WEATHER_Y + 2, fact_color, fact_text.c_str());
-}
-
-// Utility function to compute string width in pixels for the font
-int GetStringWidth(const Font& font, const std::string& text) {
-  int width = 0;
-  for (size_t i = 0; i < text.size(); ++i) {
-    width += font.CharacterWidth((uint8_t)text[i]);
-  }
-  return width;
-}
-
-// Show static images on the matrix with clock and scrolling fact.
-// Uses canvas->Clear() each frame to avoid stale pixel artifacts
-// (the previous selective clearing missed the top row of clock digits).
-void ShowDualStaticImagesWithClock(const PreRenderedImage &left_image,
-                                   const PreRenderedImage &right_image,
-                                   RGBMatrix *matrix,
-                                   const Font &font,
-                                   const Font &fact_font) {
-    FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
-    int scroll_offset = MATRIX_WIDTH;
-    std::string last_fact_text = "";
-    std::string cached_fact_text = "";
-    int fact_width = 0;
-    time_t last_brightness_check = 0;
-    int last_brightness = -1;
-    time_t last_fact_check = 0;
-
-    while (!interrupt_received) {
-        time_t now = time(nullptr);
-
-        // Check brightness only every 30 minutes (1800 seconds)
-        if (now - last_brightness_check >= 1800) {
-            int brightness = IsDimHoursEST() ? 10 : 100;
-            if (brightness != last_brightness) {
-                matrix->SetBrightness(brightness);
-                last_brightness = brightness;
-            }
-            last_brightness_check = now;
-        }
-
-        // Only lock the fact mutex once per second instead of every frame
-        if (now != last_fact_check) {
-            last_fact_check = now;
-            cached_fact_text = GetCurrentFact();
-        }
-
-        // Check if fact changed
-        if (cached_fact_text != last_fact_text) {
-            last_fact_text = cached_fact_text;
-            fact_width = GetStringWidth(fact_font, cached_fact_text);
-            scroll_offset = MATRIX_WIDTH;
-        }
-
-        // Clear entire canvas to avoid stale pixel artifacts
-        offscreen_canvas->Clear();
-
-        // Redraw images (cheap with pre-rendered pixel data)
-        CopyImageToCanvas(left_image, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
-        CopyImageToCanvas(right_image, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
-
-        DrawClock(offscreen_canvas, font);
-        DrawFactText(offscreen_canvas, fact_font, cached_fact_text, scroll_offset);
-
-        // Swap buffers
-        offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
-
-        // Update scroll position
-        scroll_offset--;
-        if (scroll_offset < -fact_width) {
-            scroll_offset = MATRIX_WIDTH;
-        }
-
-        // ~30 FPS is plenty for scrolling text on a 64-wide display
-        usleep(30000);
+private:
+  void SetPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) override {
+    if (x >= 0 && x < width_ && y >= 0 && y < height()) {
+      pixels_[y * width_ + x] = r || g || b;
+      if (r || g || b) first_ink_column_ = std::min(first_ink_column_, x);
     }
+  }
+
+  void Clear() override { std::fill(pixels_.begin(), pixels_.end(), 0); }
+  void Fill(uint8_t r, uint8_t g, uint8_t b) override {
+    std::fill(pixels_.begin(), pixels_.end(), r || g || b);
+  }
+
+  static constexpr int TOP = PORTRAIT_Y + PORTRAIT_HEIGHT;
+  inline static const Color COLOR{100, 255, 100};
+  int width_ = 0;
+  int first_ink_column_ = 0;
+  std::vector<uint8_t> pixels_;
+};
+
+static std::chrono::milliseconds AnimationDelay(const PreRenderedImage &image) {
+  return std::chrono::milliseconds(image.animation_delay > 0 ? image.animation_delay * 10 : 100);
 }
 
-// Display two animated images with clock
-void ShowDualAnimatedImagesWithClock(const PreRenderedFrames &left_images,
-                                     const PreRenderedFrames &right_images,
-                                     RGBMatrix *matrix,
-                                     const Font &font,
-                                     const Font &fact_font) {
-  FrameCanvas *offscreen_canvas = matrix->CreateFrameCanvas();
-  size_t max_frames = std::max(left_images.size(), right_images.size());
+static bool ShowRotatingPortraits(const PreRenderedFrames &first, const PreRenderedFrames &second,
+                                  CatsMatrix *matrix, const Font &clock_font, const Font &date_font,
+                                  const Font &fact_font) {
+  using WallClock = std::chrono::system_clock;
+  CatsFrame *offscreen = matrix->CreateFrameCanvas();
+  CatsFrame *background = matrix->CreateFrameCanvas();
+  const PreRenderedFrames *portrait = &first;
+  size_t frame_index = 0;
+  const auto start = DisplayClock::now();
+  auto rotate_at = start + PORTRAIT_DURATION;
+  auto animate_at = start + AnimationDelay(portrait->front());
+  auto scroll_at = start + SCROLL_PAUSE;
+  FactStrip fact_strip;
+  std::string fact_text;
+  int scroll_position = 0;
 
-  int scroll_offset = MATRIX_WIDTH;
-  std::string last_fact_text = "";
-  std::string cached_fact_text = "";
-  int fact_width = 0;
+  bool check_fact = true;
+  time_t last_clock_minute = -1;
   int last_brightness = -1;
-  time_t last_brightness_check = 0;
-  time_t last_fact_check = 0;
 
   while (!interrupt_received) {
-    for (size_t frame = 0; frame < max_frames; ++frame) {
-      if (interrupt_received) break;
+    const auto wall_now = WallClock::now();
+    const auto tick = DisplayClock::now();
+    const auto wall_second = std::chrono::floor<std::chrono::seconds>(wall_now);
+    const time_t now = WallClock::to_time_t(wall_second);
+    const time_t minute = now / 60;
+    const bool redraw_clock = minute != last_clock_minute;
+    bool redraw_portrait = false;
+    bool redraw_ticker = false;
 
-      time_t now = time(nullptr);
-
-      // Check brightness only every 30 minutes (1800 seconds)
-      if (now - last_brightness_check >= 1800) {
-        int brightness = IsDimHoursEST() ? 10 : 100;
-        if (brightness != last_brightness) {
-          matrix->SetBrightness(brightness);
-          last_brightness = brightness;
-        }
-        last_brightness_check = now;
-      }
-
-      // Only lock the fact mutex once per second
-      if (now != last_fact_check) {
-        last_fact_check = now;
-        cached_fact_text = GetCurrentFact();
-      }
-
-      // Check if fact changed
-      if (cached_fact_text != last_fact_text) {
-        last_fact_text = cached_fact_text;
-        fact_width = GetStringWidth(fact_font, cached_fact_text);
-        scroll_offset = MATRIX_WIDTH;
-      }
-
-      // Clear entire canvas to avoid stale pixel artifacts
-      offscreen_canvas->Clear();
-
-      // Redraw animation frames (cheap with pre-rendered pixel data)
-      const PreRenderedImage &left_frame = left_images[frame % left_images.size()];
-      CopyImageToCanvas(left_frame, offscreen_canvas, LEFT_IMAGE_X, IMAGE_Y);
-
-      const PreRenderedImage &right_frame = right_images[frame % right_images.size()];
-      CopyImageToCanvas(right_frame, offscreen_canvas, RIGHT_IMAGE_X, IMAGE_Y);
-
-      DrawClock(offscreen_canvas, font);
-      DrawFactText(offscreen_canvas, fact_font, cached_fact_text, scroll_offset);
-
-      // Swap buffers
-      offscreen_canvas = matrix->SwapOnVSync(offscreen_canvas);
-
-      // Update scroll position
-      scroll_offset--;
-      if (scroll_offset < -fact_width) {
-        scroll_offset = MATRIX_WIDTH;
-      }
-
-      // Frame delay from animation metadata (preserved during pre-rendering)
-      int delay = 0;
-      if (frame < left_images.size()) {
-        delay = left_images[frame].animation_delay;
-      }
-      if (frame < right_images.size()) {
-        int right_delay = right_images[frame].animation_delay;
-        delay = (delay > 0) ? (delay + right_delay) / 2 : right_delay;
-      }
-      if (delay <= 0) delay = 10; // 100ms default
-
-      usleep(delay * 10000);
+    if (tick >= rotate_at) {
+      portrait = portrait == &first ? &second : &first;
+      frame_index = 0;
+      rotate_at = tick + PORTRAIT_DURATION;
+      animate_at = tick + AnimationDelay(portrait->front());
+      redraw_portrait = true;
+    } else if (portrait->size() > 1 && tick >= animate_at) {
+      frame_index = (frame_index + 1) % portrait->size();
+      animate_at = tick + AnimationDelay((*portrait)[frame_index]);
+      redraw_portrait = true;
     }
+
+    if (check_fact) {
+      std::string latest_fact = GetCurrentFact();
+      if (latest_fact != fact_text) {
+        fact_text.swap(latest_fact);
+        fact_strip.SetText(fact_font, fact_text);
+        scroll_position = 0;
+        scroll_at = tick + SCROLL_PAUSE;
+        redraw_ticker = true;
+      }
+    }
+
+    const int fact_width = fact_strip.content_width();
+    const bool scroll = fact_width > MATRIX_WIDTH - PORTRAIT_X;
+    const int scroll_period = fact_width + SCROLL_GAP;
+    if (scroll && tick >= scroll_at) {
+      scroll_position = (scroll_position + 1) % scroll_period;
+      scroll_at = tick + SCROLL_STEP;
+      redraw_ticker = true;
+    }
+
+    if (redraw_clock) {
+      std::tm local;
+      localtime_r(&now, &local);
+      const int brightness = BrightnessForLocalTime(local);
+      if (brightness != last_brightness) {
+        matrix->SetBrightness(brightness);
+        last_brightness = brightness;
+      }
+      background->Clear();
+      DrawClock(background, clock_font, date_font, local);
+      last_clock_minute = minute;
+      redraw_portrait = true;
+    }
+    if (redraw_portrait) DrawPortrait((*portrait)[frame_index], background);
+    if (redraw_portrait || redraw_ticker) {
+      offscreen->CopyFrom(*background);
+      const int ticker_x = PORTRAIT_X - scroll_position;
+      fact_strip.Draw(offscreen, ticker_x);
+      // The next copy can enter before the previous copy finishes leaving.
+      if (scroll) fact_strip.Draw(offscreen, ticker_x + scroll_period);
+      offscreen = matrix->SwapOnVSync(offscreen);
+      if (!offscreen) {
+        fprintf(stderr, "Could not submit a display frame\n");
+        return false;
+      }
+    }
+#ifdef CATS_PREVIEW
+    const auto window_status = matrix->PollEvents();
+    if (window_status != CatsMatrix::WindowStatus::Open) {
+      return window_status == CatsMatrix::WindowStatus::Closed;
+    }
+#endif
+
+    const auto next_minute = std::chrono::floor<std::chrono::minutes>(wall_now) +
+                             std::chrono::minutes(1);
+    const auto wall_delay = std::chrono::ceil<DisplayClock::duration>(next_minute - wall_now);
+    auto wake_at = std::min(rotate_at, tick + wall_delay);
+    if (scroll) wake_at = std::min(wake_at, scroll_at);
+    if (portrait->size() > 1) wake_at = std::min(wake_at, animate_at);
+#ifdef CATS_PREVIEW
+    wake_at = std::min(wake_at, tick + SCROLL_STEP);
+#endif
+    const DisplayWake wake = WaitForDisplayUpdate(wake_at);
+    if (wake == DisplayWake::Error) return false;
+    check_fact = wake == DisplayWake::Notification;
   }
+  return true;
 }
 
 int usage(const char *progname) {
-  fprintf(stderr, "Usage: %s [led-matrix-options] <left-image> <right-image>\n", progname);
-  fprintf(stderr, "\nDisplays two images side by side on a 64x32 LED matrix with clock and random facts\n");
-  fprintf(stderr, "Left image: columns 0-17, Right image: columns 46-63\n");
-  fprintf(stderr, "Clock in expanded middle: columns 18-45\n");
-  fprintf(stderr, "Random facts scroll at bottom (updates once daily)\n");
-  fprintf(stderr, "Each image is scaled to %dx%d pixels\n\n", LEFT_IMAGE_WIDTH, IMAGE_HEIGHT);
-  rgb_matrix::PrintMatrixFlags(stderr);
+#ifdef CATS_PREVIEW
+  fprintf(stderr, "Usage: %s <first-image> <second-image>\n", progname);
+#else
+  fprintf(stderr, "Usage: %s [led-matrix-options] <first-image> <second-image>\n", progname);
+#endif
+  fprintf(stderr, "\nAlternates two %dx%d portraits every %lld seconds on a 64x32 matrix.\n",
+          PORTRAIT_WIDTH, PORTRAIT_HEIGHT, static_cast<long long>(PORTRAIT_DURATION.count()));
+  fprintf(stderr, "The clock and date sit on the right and the daily fact scrolls below.\n\n");
+#ifndef CATS_PREVIEW
+  rgb_matrix::PrintMatrixFlags(stderr, DefaultMatrixOptions());
+#endif
   return 1;
 }
 
@@ -575,121 +728,86 @@ int main(int argc, char *argv[]) {
   curl_global_init(CURL_GLOBAL_DEFAULT);
   Magick::InitializeMagick(*argv);
 
-  // Initialize the RGB matrix
-  RGBMatrix::Options matrix_options;
+#ifndef CATS_PREVIEW
+  auto matrix_options = DefaultMatrixOptions();
   rgb_matrix::RuntimeOptions runtime_opt;
   if (!rgb_matrix::ParseOptionsFromFlags(&argc, &argv,
                                          &matrix_options, &runtime_opt)) {
     return usage(argv[0]);
   }
+#endif
 
   if (argc < 3) {
     return usage(argv[0]);
   }
 
-  const char *left_filename = argv[1];
-  const char *right_filename = argv[2];
+  const char *first_filename = argv[1];
+  const char *second_filename = argv[2];
 
+  if (!InitializeDisplayWakeup()) {
+    perror("Could not initialize display wakeup pipe");
+    return 1;
+  }
   signal(SIGTERM, InterruptHandler);
   signal(SIGINT, InterruptHandler);
 
-  RGBMatrix *matrix = RGBMatrix::CreateFromOptions(matrix_options, runtime_opt);
-  if (matrix == NULL) {
+#ifdef CATS_PREVIEW
+  auto matrix = CatsMatrix::Create(MATRIX_WIDTH, MATRIX_HEIGHT);
+#else
+  std::unique_ptr<CatsMatrix> matrix(CatsMatrix::CreateFromOptions(matrix_options, runtime_opt));
+#endif
+  if (!matrix) {
     fprintf(stderr, "Failed to create matrix\n");
     return 1;
   }
 
-  Font font;      // For clock and general text
-  Font fact_font; // For scrolling fact text
-  Font* fact_font_ptr = &fact_font;
+  Font date_font;
+  Font clock_font;
+  Font fact_font;
+  if (!date_font.LoadFont(CATS_FONT_DIR "/5x7.bdf")) {
+    fprintf(stderr, "Could not load 5x7.bdf for date.\n");
+    return 1;
+  }
+  const Font &clock = clock_font.LoadFont(CATS_FONT_DIR "/6x13.bdf") ? clock_font : date_font;
+  const Font &ticker = fact_font.LoadFont(CATS_FONT_DIR "/5x8.bdf") ? fact_font : date_font;
 
-  if (!font.LoadFont("/opt/cats-display/fonts/5x7.bdf")) {
-      fprintf(stderr, "Could not load font for clock!\n");
-      return 1;
-  }
-  if (!fact_font.LoadFont("/opt/cats-display/fonts/6x13.bdf")) {
-      fprintf(stderr, "Could not load font 6x13 for facts!\n");
-      if (!fact_font.LoadFont("/opt/cats-display/fonts/6x9.bdf")) {
-          fprintf(stderr, "Could not load font 6x9 for facts!\n");
-          if (!fact_font.LoadFont("/opt/cats-display/fonts/5x8.bdf")) {
-              fprintf(stderr, "Could not load large font 5x8 for facts. Using default.\n");
-              fact_font_ptr = &font; // fallback to pointer
-          }
-      }
-  }
   // Verify matrix dimensions
   if (matrix->width() != MATRIX_WIDTH || matrix->height() != MATRIX_HEIGHT) {
     fprintf(stderr, "Warning: Expected %dx%d matrix, got %dx%d\n",
             MATRIX_WIDTH, MATRIX_HEIGHT, matrix->width(), matrix->height());
   }
 
-  // Load both images
-  ImageVector left_images = LoadImageAndScaleImage(left_filename,
-                                                  LEFT_IMAGE_WIDTH,
-                                                  IMAGE_HEIGHT);
-  ImageVector right_images = LoadImageAndScaleImage(right_filename,
-                                                   RIGHT_IMAGE_WIDTH,
-                                                   IMAGE_HEIGHT);
-
-  // Check if both images loaded successfully
-  if (left_images.empty()) {
-    fprintf(stderr, "Failed to load left image: %s\n", left_filename);
-    delete matrix;
+  const PreRenderedFrames first = LoadPortrait(first_filename);
+  if (first.empty()) {
+    fprintf(stderr, "Failed to load first image: %s\n", first_filename);
     return 1;
   }
 
-  if (right_images.empty()) {
-    fprintf(stderr, "Failed to load right image: %s\n", right_filename);
-    delete matrix;
+  const PreRenderedFrames second = LoadPortrait(second_filename);
+  if (second.empty()) {
+    fprintf(stderr, "Failed to load second image: %s\n", second_filename);
     return 1;
   }
 
-  printf("Matrix: %dx%d, Left: %zu frames, Right: %zu frames\n",
-         matrix->width(), matrix->height(),
-         left_images.size(), right_images.size());
-  printf("Image dimensions: %dx%d, Middle gap: %d pixels wide\n",
-         LEFT_IMAGE_WIDTH, IMAGE_HEIGHT, GAP_WIDTH);
-
-  // Pre-render images to raw pixel arrays so the render loop doesn't
-  // need to call GraphicsMagick's expensive pixelColor() per pixel per frame.
-  printf("Pre-rendering image frames...\n");
-  PreRenderedFrames left_frames = PreRenderAllFrames(left_images);
-  PreRenderedFrames right_frames = PreRenderAllFrames(right_images);
-
-  // Free GraphicsMagick image data now that we have raw pixel copies
-  left_images.clear();
-  right_images.clear();
-  printf("Pre-rendering complete, GraphicsMagick images freed.\n");
-
-  // Start the background fact update thread
-  std::thread fact_thread(FactUpdateThread);
-
-  std::string initial_fact = "Waiting for network... fact loading in background";
-
-  {
-    std::lock_guard<std::mutex> lock(fact_mutex);
-    current_fact = initial_fact;
+  const std::string today = LocalDate(std::time(nullptr));
+  DailyFact cached = LoadLatestCachedFact(today);
+  if (!cached.text.empty()) {
+    current_fact = cached.text;
+    printf("Loaded cached fact for %s\n", cached.day.c_str());
   }
-  printf("Today's fact: %s\n", initial_fact.c_str());
-
-  // Display the images based on whether they're animated or static
-  bool left_animated = left_frames.size() > 1;
-  bool right_animated = right_frames.size() > 1;
-
-  if (!left_animated && !right_animated) {
-    ShowDualStaticImagesWithClock(left_frames[0], right_frames[0], matrix, font, *fact_font_ptr);
-  } else {
-    ShowDualAnimatedImagesWithClock(left_frames, right_frames, matrix, font, *fact_font_ptr);
-  }
+  std::thread fact_thread(FactUpdateThread, today, std::move(cached));
+  const bool display_ok = ShowRotatingPortraits(first, second, matrix.get(), clock, date_font, ticker);
 
   // Clean shutdown - wake the fact thread so it exits promptly
   printf("Shutting down...\n");
-  should_stop_fact_thread = true;
+  {
+    std::lock_guard<std::mutex> lock(fact_stop_mutex);
+    should_stop_fact_thread = true;
+  }
   fact_stop_cv.notify_all();
   fact_thread.join();
 
-  matrix->Clear();
-  delete matrix;
+  matrix.reset();
   curl_global_cleanup();
-  return 0;
+  return display_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

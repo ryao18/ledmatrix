@@ -47,6 +47,52 @@ Check out [utils/ directory for some ready-made tools](./utils) to get started
 using the library, or the [examples-api-use/](./examples-api-use) directory if
 you want to get started programming your own utils.
 
+## Testing `cats` refresh on the Pi Zero W
+
+`cats` defaults to a single 64×32 panel. The documented launch uses the driver's
+uncapped default (`--led-limit-refresh=0`). The service on the Pi can override that value.
+[Launch notes](./catinstruction.txt) · [Driver defaults](./lib/led-matrix.cc#L322-L330)
+
+The app sets the display to 100% from 8:00 a.m. until 11:30 p.m. and 10% overnight,
+using the Pi's local time.
+
+1. On the Pi, check the service command and working directory. Use the service's
+   panel flags and image paths if they differ from the examples below.
+
+   ```sh
+   systemctl show cats-display -p ExecStart -p WorkingDirectory
+   ```
+
+2. Stop the service so only one process drives the panel. Measure the uncapped
+   refresh rate for about a minute with `--led-show-refresh`.
+
+   ```sh
+   cd ~/rpi-rgb-led-matrix/examples-api-use
+   sudo systemctl stop cats-display
+   sudo timeout --signal=INT --kill-after=5s 60s ./cats \
+     --led-rows=32 --led-cols=64 \
+     --led-show-refresh --led-limit-refresh=0 \
+     ../img/ocean_portrait_blue.png ../img/fungus_small.png
+   ```
+
+3. If the baseline is comfortably above 100 Hz, try a 100 Hz cap with busy
+   waiting disabled. The refresh thread can sleep between scans when a scan
+   finishes early. Compare CPU usage and SSH responsiveness over Tailscale
+   during both runs, and check the panel for visible flicker when possible.
+
+   ```sh
+   sudo timeout --signal=INT --kill-after=5s 60s ./cats \
+     --led-rows=32 --led-cols=64 \
+     --led-show-refresh --led-limit-refresh=100 --led-no-busy-waiting \
+     ../img/ocean_portrait_blue.png ../img/fungus_small.png
+   ```
+
+4. Start the service again to return to its configured launch flags.
+
+   ```sh
+   sudo systemctl start cats-display
+   ```
+
 Panels supported
 ----------------
 This library does not support PWM panels (which actually are better, but need 
