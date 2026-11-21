@@ -508,21 +508,24 @@ static PreRenderedFrames LoadPortrait(const char *filename) {
 static void DrawSideHearts(Canvas *canvas) {
   constexpr char heart[HEART_SIZE][HEART_SIZE + 1] = {
       ".#.#.",
-      "#####",
+      "#h###",
       "#####",
       ".###.",
       "..#..",
   };
   constexpr Pixel red{255, 40, 40};
+  constexpr Pixel highlight{255, 110, 130};
   constexpr int tops[] = {2, 9, 16};
   constexpr int right = MATRIX_WIDTH - HEART_SIZE;
 
   for (int top : tops) {
     for (int y = 0; y < HEART_SIZE; ++y) {
       for (int x = 0; x < HEART_SIZE; ++x) {
-        if (heart[y][x] == '.') continue;
-        canvas->SetPixel(x, top + y, red.r, red.g, red.b);
-        canvas->SetPixel(right + x, top + y, red.r, red.g, red.b);
+        const char pixel = heart[y][x];
+        if (pixel == '.') continue;
+        const Pixel &color = pixel == 'h' ? highlight : red;
+        canvas->SetPixel(x, top + y, color.r, color.g, color.b);
+        canvas->SetPixel(right + x, top + y, color.r, color.g, color.b);
       }
     }
   }
