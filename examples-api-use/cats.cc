@@ -140,15 +140,16 @@ using PreRenderedFrames = std::vector<PreRenderedImage>;
 
 constexpr int MATRIX_WIDTH = 64;
 constexpr int MATRIX_HEIGHT = 32;
-constexpr int PORTRAIT_X = 1;
+constexpr int PORTRAIT_X = 5;
 constexpr int PORTRAIT_Y = 1;
-constexpr int PORTRAIT_WIDTH = 32;
 constexpr int PORTRAIT_HEIGHT = 22;
 constexpr int PORTRAIT_SIZE = 21;
-constexpr int CLOCK_X = PORTRAIT_WIDTH + 2;
-constexpr int CLOCK_WIDTH = MATRIX_WIDTH - CLOCK_X;
+constexpr int CLOCK_WIDTH = 30;
+// The 6x13 clock font leaves one blank column after the final digit.
+constexpr int CLOCK_X = MATRIX_WIDTH - CLOCK_WIDTH - PORTRAIT_X + 1;
 constexpr int CLOCK_BASELINE = 13;
 constexpr int DATE_BASELINE = 21;
+constexpr int FACT_X = 1;
 constexpr int FACT_BASELINE = 30;
 
 #ifndef CATS_PREVIEW
@@ -503,12 +504,11 @@ static PreRenderedFrames LoadPortrait(const char *filename) {
 }
 
 static void DrawPortrait(const PreRenderedImage &image, Canvas *canvas) {
-  constexpr int left = PORTRAIT_X + (PORTRAIT_WIDTH - PORTRAIT_SIZE) / 2;
   constexpr int top = PORTRAIT_Y + (PORTRAIT_HEIGHT - PORTRAIT_SIZE) / 2;
   for (int y = 0; y < PORTRAIT_SIZE; ++y) {
     for (int x = 0; x < PORTRAIT_SIZE; ++x) {
       const Pixel &p = image.pixels[y * PORTRAIT_SIZE + x];
-      canvas->SetPixel(left + x, top + y, p.r, p.g, p.b);
+      canvas->SetPixel(PORTRAIT_X + x, top + y, p.r, p.g, p.b);
     }
   }
 }
@@ -649,7 +649,7 @@ static bool ShowRotatingPortraits(const PreRenderedFrames &first, const PreRende
     }
 
     const int fact_width = fact_strip.content_width();
-    const bool scroll = fact_width > MATRIX_WIDTH - PORTRAIT_X;
+    const bool scroll = fact_width > MATRIX_WIDTH - FACT_X;
     const int scroll_period = fact_width + SCROLL_GAP;
     if (scroll && tick >= scroll_at) {
       scroll_position = (scroll_position + 1) % scroll_period;
@@ -673,7 +673,7 @@ static bool ShowRotatingPortraits(const PreRenderedFrames &first, const PreRende
     if (redraw_portrait) DrawPortrait((*portrait)[frame_index], background);
     if (redraw_portrait || redraw_ticker) {
       offscreen->CopyFrom(*background);
-      const int ticker_x = PORTRAIT_X - scroll_position;
+      const int ticker_x = FACT_X - scroll_position;
       fact_strip.Draw(offscreen, ticker_x);
       // The next copy can enter before the previous copy finishes leaving.
       if (scroll) fact_strip.Draw(offscreen, ticker_x + scroll_period);
