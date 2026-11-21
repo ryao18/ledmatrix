@@ -140,8 +140,8 @@ using PreRenderedFrames = std::vector<PreRenderedImage>;
 
 constexpr int MATRIX_WIDTH = 64;
 constexpr int MATRIX_HEIGHT = 32;
-constexpr int CAT_FACE_SIZE = 5;
-constexpr int CONTENT_INSET = CAT_FACE_SIZE + 1;
+constexpr int HEART_SIZE = 5;
+constexpr int CONTENT_INSET = HEART_SIZE + 1;
 constexpr int PORTRAIT_X = CONTENT_INSET;
 constexpr int PORTRAIT_Y = 1;
 constexpr int PORTRAIT_HEIGHT = 22;
@@ -505,26 +505,24 @@ static PreRenderedFrames LoadPortrait(const char *filename) {
   return result;
 }
 
-static void DrawSideCats(Canvas *canvas) {
-  constexpr char face[CAT_FACE_SIZE][CAT_FACE_SIZE + 1] = {
-      "#...#",
-      "##.##",
+static void DrawSideHearts(Canvas *canvas) {
+  constexpr char heart[HEART_SIZE][HEART_SIZE + 1] = {
+      ".#.#.",
       "#####",
-      "#e#e#",
+      "#####",
       ".###.",
+      "..#..",
   };
-  constexpr Pixel fur{205, 182, 150};
-  constexpr Pixel eye{86, 67, 57};
+  constexpr Pixel red{255, 40, 40};
   constexpr int tops[] = {2, 9, 16};
-  constexpr int right = MATRIX_WIDTH - CAT_FACE_SIZE;
+  constexpr int right = MATRIX_WIDTH - HEART_SIZE;
 
   for (int top : tops) {
-    for (int y = 0; y < CAT_FACE_SIZE; ++y) {
-      for (int x = 0; x < CAT_FACE_SIZE; ++x) {
-        if (face[y][x] == '.') continue;
-        const Pixel &color = face[y][x] == 'e' ? eye : fur;
-        canvas->SetPixel(x, top + y, color.r, color.g, color.b);
-        canvas->SetPixel(right + x, top + y, color.r, color.g, color.b);
+    for (int y = 0; y < HEART_SIZE; ++y) {
+      for (int x = 0; x < HEART_SIZE; ++x) {
+        if (heart[y][x] == '.') continue;
+        canvas->SetPixel(x, top + y, red.r, red.g, red.b);
+        canvas->SetPixel(right + x, top + y, red.r, red.g, red.b);
       }
     }
   }
@@ -693,7 +691,7 @@ static bool ShowRotatingPortraits(const PreRenderedFrames &first, const PreRende
         last_brightness = brightness;
       }
       background->Clear();
-      DrawSideCats(background);
+      DrawSideHearts(background);
       DrawClock(background, clock_font, date_font, local);
       last_clock_minute = minute;
       redraw_portrait = true;
