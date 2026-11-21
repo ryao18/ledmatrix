@@ -49,6 +49,9 @@ you want to get started programming your own utils.
 
 ## Testing `cats` refresh on the Pi Zero W
 
+For a fresh install or a full walkthrough from SSH to a running service, see the
+[Cats display setup guide](./CATS_SETUP.md).
+
 `cats` defaults to a single 64×32 panel. The documented launch uses the driver's
 uncapped default (`--led-limit-refresh=0`). The service on the Pi can override that value.
 [Launch notes](./catinstruction.txt) · [Driver defaults](./lib/led-matrix.cc#L322-L330)
