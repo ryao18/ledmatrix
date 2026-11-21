@@ -8,10 +8,11 @@ down below is latest
 
 cd ~/rpi-rgb-led-matrix/examples-api-use
 
-make clean && make cats
+sudo systemctl stop cats-display && make -j1 cats
 
 sudo ./cats --led-rows=32 --led-cols=64 ../img/ocean_portrait_blue.png ../img/fungus_small.png
 
+Press Ctrl+C when the foreground test is done before starting the service.
 
 sudo nano /etc/systemd/system/cats-display.service
 sudo systemctl daemon-reload

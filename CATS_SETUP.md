@@ -2,7 +2,7 @@
 
 This guide sets up `cats` on a single 64×32 panel, with Ocean’s blue-background portrait, Fungus’s portrait, the clock and date, and the daily fact ticker. You can run it from an SSH terminal or have Codex on the Mac run the same commands over SSH.
 
-## 1. Connect to the Pi
+## 1. Connect and inspect the existing setup
 
 From the Mac, use your Pi login and its Tailscale hostname or IP address.
 
@@ -12,12 +12,21 @@ ssh your-user@your-pi
 
 For a new Pi, use [Raspberry Pi OS Lite (32-bit)](https://www.raspberrypi.com/software/operating-systems/) and [configure Wi-Fi and SSH in Raspberry Pi Imager](https://www.raspberrypi.com/documentation/computers/getting-started.html). Use the [adapter and wiring guide](./adapter/README.md) for the panel. The remaining commands run on the Pi and assume the panel is connected and powered.
 
-If `cats-display` is already installed, record its binary, image paths, working directory, and panel flags before making changes.
+If `cats-display` is already installed, check its current setup before changing anything. Use the actual checkout path if yours differs.
 
 ```sh
-systemctl cat cats-display.service
-systemctl show cats-display.service -p ExecStart -p WorkingDirectory
+systemctl cat cats-display.service --no-pager
+systemctl show cats-display.service \
+  -p ActiveState -p UnitFileState -p FragmentPath -p DropInPaths \
+  -p User -p ExecStart -p WorkingDirectory
+sudo journalctl -u cats-display.service -n 30 --no-pager
+git -C ~/rpi-rgb-led-matrix status --short --branch
+ls -l /opt/cats-display/fonts
+free -h
+uptime
 ```
+
+Record which binary and photos `ExecStart` uses, whether it launches from the checkout or a separate install, and any panel flags set by the unit or its drop-ins. The log, available memory, and load give you a baseline while the display is running.
 
 ## 2. Build `cats` and install the fonts
 
@@ -33,6 +42,12 @@ For a fresh checkout, run the following. If the repo is private, use a GitHub re
 
 ```sh
 git clone https://github.com/ryao18/ledmatrix.git ~/rpi-rgb-led-matrix
+```
+
+If updating an existing service, stop it before pulling and rebuilding. Leave it stopped until the updated binary and assets are in place in step 3.
+
+```sh
+sudo systemctl stop cats-display.service
 ```
 
 For an existing checkout on `main`, pull the latest version. Use your actual checkout path throughout the guide if it differs.
@@ -88,7 +103,7 @@ sudo systemctl enable --now cats-display.service
 
 ### Existing service
 
-Keep the hardware flags from the current unit. If it runs `cats` from the checkout, the build in step 2 updates its binary. If it runs a separate copy, run `sudo systemctl stop cats-display.service` and install the rebuilt binary and updated images in its deployment directories. Use the copy commands above if it uses `/opt/cats-display`.
+Keep the hardware flags from the current unit. If it runs `cats` from the checkout, the build in step 2 updates its binary. If it runs a separate copy, install the rebuilt binary and updated images in its deployment directories. Use the copy commands above if it uses `/opt/cats-display`.
 
 If the first picture in `ExecStart` points to the old Ocean photo, edit the unit and point it to the new `ocean_portrait_blue.png` alongside `fungus_small.png`. Relative paths resolve from `WorkingDirectory`. Make sure `daemon` can read both pictures and traverse their directories. If `systemctl cat` shows a drop-in that sets `ExecStart`, edit that drop-in.
 
@@ -96,11 +111,11 @@ If the first picture in `ExecStart` points to the old Ocean photo, edit the unit
 sudo systemctl edit --full cats-display.service
 ```
 
-If the unit already points to the rebuilt or redeployed binary and the new photo, skip the edit and restart it. Reload after changing a unit file.
+If the unit already points to the rebuilt or redeployed binary and the new photo, skip the edit. Reload after changing a unit file, then start the service.
 
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl restart cats-display.service
+sudo systemctl start cats-display.service
 ```
 
 ## 4. Verify the display
@@ -143,4 +158,4 @@ Start the service again with its configured settings.
 sudo systemctl start cats-display.service
 ```
 
-To keep the cap, add `--led-limit-refresh=100 --led-no-busy-waiting` to the service’s `ExecStart` before the image paths. Reload and restart the service as in step 3 and check its status and logs again. Remove those two flags and repeat the reload and restart to return to the uncapped default.
+To keep the cap, add `--led-limit-refresh=100 --led-no-busy-waiting` to the service’s `ExecStart` before the image paths. Apply the change with `sudo systemctl daemon-reload` and `sudo systemctl restart cats-display.service`, then check its status and logs again. Remove those two flags and repeat the reload and restart to return to the uncapped default.
