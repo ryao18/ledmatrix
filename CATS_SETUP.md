@@ -1,6 +1,6 @@
 # Cats display setup on a Raspberry Pi Zero W
 
-This guide sets up `cats` on a single 64×32 panel, with Ocean’s blue-background portrait, Fungus’s portrait, the clock and date, and the daily fact ticker. You can run it from an SSH terminal or have Codex on the Mac run the same commands over SSH.
+This guide sets up `cats` on a single 64×32 panel, with 21×21 portraits of Ocean and Fungus, the clock and date, and the daily fact ticker. You can run it from an SSH terminal or have Codex on the Mac run the same commands over SSH.
 
 ## 1. Connect and inspect the existing setup
 
@@ -76,7 +76,7 @@ Install the binary and both pictures under `/opt/cats-display`.
 cd ~/rpi-rgb-led-matrix
 sudo install -d -m 0755 /opt/cats-display/img
 sudo install -m 0755 examples-api-use/cats /opt/cats-display/cats
-sudo install -m 0644 img/ocean_portrait_blue.png img/fungus_small.png /opt/cats-display/img/
+sudo install -m 0644 img/ocean_portrait_blue_square.png img/fungus_portrait_square.png /opt/cats-display/img/
 ```
 
 Create the unit below. Add any flags required by your panel or adapter to `ExecStart` before the image paths. The service starts with GPIO access and the driver then drops privileges to `daemon`.
@@ -89,7 +89,7 @@ Description=Cats LED matrix display
 [Service]
 Type=simple
 WorkingDirectory=/opt/cats-display
-ExecStart=/opt/cats-display/cats --led-rows=32 --led-cols=64 /opt/cats-display/img/ocean_portrait_blue.png /opt/cats-display/img/fungus_small.png
+ExecStart=/opt/cats-display/cats --led-rows=32 --led-cols=64 /opt/cats-display/img/ocean_portrait_blue_square.png /opt/cats-display/img/fungus_portrait_square.png
 Restart=on-failure
 RestartSec=5s
 
@@ -103,15 +103,15 @@ sudo systemctl enable --now cats-display.service
 
 ### Existing service
 
-Keep the hardware flags from the current unit. If it runs `cats` from the checkout, the build in step 2 updates its binary. If it runs a separate copy, install the rebuilt binary and updated images in its deployment directories. Use the copy commands above if it uses `/opt/cats-display`.
+Keep the hardware flags from the current unit. If it runs `cats` from the checkout, the build in step 2 updates its binary. If it runs a separate copy, install the rebuilt binary in its deployment directory. Copy the new portraits into the image directory used by the service, using the image copy command above if that directory is `/opt/cats-display/img`.
 
-If the first picture in `ExecStart` points to the old Ocean photo, edit the unit and point it to the new `ocean_portrait_blue.png` alongside `fungus_small.png`. Relative paths resolve from `WorkingDirectory`. Make sure `daemon` can read both pictures and traverse their directories. If `systemctl cat` shows a drop-in that sets `ExecStart`, edit that drop-in.
+Update the two picture paths in `ExecStart` to use `ocean_portrait_blue_square.png` and `fungus_portrait_square.png`. Relative paths resolve from `WorkingDirectory`. Make sure `daemon` can read both pictures and traverse their directories. If `systemctl cat` shows a drop-in that sets `ExecStart`, edit that drop-in.
 
 ```sh
 sudo systemctl edit --full cats-display.service
 ```
 
-If the unit already points to the rebuilt or redeployed binary and the new photo, skip the edit. Reload after changing a unit file, then start the service.
+If the unit already points to the rebuilt or redeployed binary and both new portraits, skip the edit. Reload after changing a unit file, then start the service.
 
 ```sh
 sudo systemctl daemon-reload
@@ -141,7 +141,7 @@ cd /opt/cats-display
 sudo systemctl stop cats-display.service
 sudo timeout --signal=INT --kill-after=5s 60s ./cats \
   --led-rows=32 --led-cols=64 --led-show-refresh --led-limit-refresh=0 \
-  img/ocean_portrait_blue.png img/fungus_small.png
+  img/ocean_portrait_blue_square.png img/fungus_portrait_square.png
 ```
 
 If the baseline stays comfortably above 100 Hz, test the cap with busy waiting disabled. Compare CPU usage and SSH responsiveness during both runs, and check the panel for flicker when you can see it.
@@ -149,7 +149,7 @@ If the baseline stays comfortably above 100 Hz, test the cap with busy waiting d
 ```sh
 sudo timeout --signal=INT --kill-after=5s 60s ./cats \
   --led-rows=32 --led-cols=64 --led-show-refresh --led-limit-refresh=100 \
-  --led-no-busy-waiting img/ocean_portrait_blue.png img/fungus_small.png
+  --led-no-busy-waiting img/ocean_portrait_blue_square.png img/fungus_portrait_square.png
 ```
 
 Start the service again with its configured settings.

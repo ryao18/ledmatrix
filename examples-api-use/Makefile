@@ -68,7 +68,7 @@ cats-preview: $(PREVIEW_SOURCES) cats-preview.h ../include/canvas.h ../include/g
 		$(shell $(PREVIEW_MAGICK_CONFIG) --ldflags --libs) -L"$(PREVIEW_JSON_PREFIX)/lib" -ljsoncpp -lcurl
 
 preview: cats-preview
-	./cats-preview ../img/ocean_portrait_blue.png ../img/fungus_small.png
+	./cats-preview ../img/ocean_portrait_blue_square.png ../img/fungus_portrait_square.png
 
 # Since the C example uses the C++ library underneath, which depends on C++
 # runtime stuff, you still have to also link -lstdc++

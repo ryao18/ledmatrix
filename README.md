@@ -89,12 +89,11 @@ cd ~/rpi-rgb-led-matrix &&
 
 ### Update and start `cats-display.service`
 
-`cats` takes its two picture paths from `ExecStart`. If the first path still
-points to the old Ocean photo, change it to `ocean_portrait_blue.png`. If the
-service points to a deployed copy of `cats`, update that copy and put the new
-PNG alongside its images, or point the service at the rebuilt checkout.
-If the service already points to the rebuilt binary and the new photo, skip
-editing the unit.
+`cats` takes its two picture paths from `ExecStart`. Use
+`ocean_portrait_blue_square.png` and `fungus_portrait_square.png` for the
+21×21 portraits. If the service uses a deployment directory, copy the new
+images there and update any separately deployed `cats` binary. If the unit
+already points to the rebuilt binary and both images, skip editing it.
 
 Edit the main unit with the command below. If `systemctl cat` shows a drop-in
 that overrides `ExecStart`, update the command in that drop-in instead.
@@ -109,7 +108,7 @@ like this. Use your actual absolute paths and keep your existing panel flags.
 ```ini
 [Service]
 WorkingDirectory=/home/pi/rpi-rgb-led-matrix/examples-api-use
-ExecStart=/home/pi/rpi-rgb-led-matrix/examples-api-use/cats --led-rows=32 --led-cols=64 ../img/ocean_portrait_blue.png ../img/fungus_small.png
+ExecStart=/home/pi/rpi-rgb-led-matrix/examples-api-use/cats --led-rows=32 --led-cols=64 ../img/ocean_portrait_blue_square.png ../img/fungus_portrait_square.png
 Restart=on-failure
 ```
 
@@ -127,8 +126,8 @@ sudo journalctl -u cats-display -n 30 --no-pager
 
 ### Try 100 Hz from the checkout
 
-The commands below run the rebuilt binary with the new Ocean portrait and the
-existing Fungus photo. Use any extra panel flags from your service, such as its
+The commands below run the rebuilt binary with the square Ocean and Fungus
+portraits. Use any extra panel flags from your service, such as its
 GPIO mapping, panel type, or slowdown settings.
 
 1. Stop the service so only one process drives the panel. Measure the uncapped
@@ -140,7 +139,7 @@ GPIO mapping, panel type, or slowdown settings.
    sudo timeout --signal=INT --kill-after=5s 60s ./cats \
      --led-rows=32 --led-cols=64 \
      --led-show-refresh --led-limit-refresh=0 \
-     ../img/ocean_portrait_blue.png ../img/fungus_small.png
+     ../img/ocean_portrait_blue_square.png ../img/fungus_portrait_square.png
    ```
 
 2. If the baseline is comfortably above 100 Hz, try a 100 Hz cap with busy
@@ -152,7 +151,7 @@ GPIO mapping, panel type, or slowdown settings.
    sudo timeout --signal=INT --kill-after=5s 60s ./cats \
      --led-rows=32 --led-cols=64 \
      --led-show-refresh --led-limit-refresh=100 --led-no-busy-waiting \
-     ../img/ocean_portrait_blue.png ../img/fungus_small.png
+     ../img/ocean_portrait_blue_square.png ../img/fungus_portrait_square.png
    ```
 
 3. Start the service again to return to its configured launch flags.

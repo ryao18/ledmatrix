@@ -133,7 +133,6 @@ struct Pixel {
 
 struct PreRenderedImage {
   std::vector<Pixel> pixels;
-  int width, height;
   int animation_delay;  // GIF frame delay in centiseconds (preserved from GM)
 };
 
@@ -145,6 +144,7 @@ constexpr int PORTRAIT_X = 1;
 constexpr int PORTRAIT_Y = 1;
 constexpr int PORTRAIT_WIDTH = 32;
 constexpr int PORTRAIT_HEIGHT = 22;
+constexpr int PORTRAIT_SIZE = 21;
 constexpr int CLOCK_X = PORTRAIT_WIDTH + 2;
 constexpr int CLOCK_WIDTH = MATRIX_WIDTH - CLOCK_X;
 constexpr int CLOCK_BASELINE = 13;
@@ -454,16 +454,18 @@ static std::string GetFactTickerText() {
 // per-pixel pixelColor() accessor from GraphicsMagick.
 static PreRenderedImage PreRenderImage(const Magick::Image &image) {
   PreRenderedImage result;
-  result.width = image.columns();
-  result.height = image.rows();
   result.animation_delay = image.animationDelay();
-  result.pixels.resize(result.width * result.height);
+  result.pixels.resize(PORTRAIT_SIZE * PORTRAIT_SIZE);
+  const int width = image.columns();
+  const int height = image.rows();
+  const int left = (PORTRAIT_SIZE - width) / 2;
+  const int top = (PORTRAIT_SIZE - height) / 2;
   const bool has_alpha = image.matte();
-  for (int y = 0; y < result.height; ++y) {
-    for (int x = 0; x < result.width; ++x) {
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
       const Magick::Color c = image.pixelColor(x, y);
       const int opacity = has_alpha ? 255 - ScaleQuantumToChar(c.alphaQuantum()) : 255;
-      Pixel &p = result.pixels[y * result.width + x];
+      Pixel &p = result.pixels[(y + top) * PORTRAIT_SIZE + x + left];
       p.r = (ScaleQuantumToChar(c.redQuantum()) * opacity + 127) / 255;
       p.g = (ScaleQuantumToChar(c.greenQuantum()) * opacity + 127) / 255;
       p.b = (ScaleQuantumToChar(c.blueQuantum()) * opacity + 127) / 255;
@@ -478,24 +480,16 @@ static PreRenderedFrames LoadPortrait(const char *filename) {
     ImageVector frames;
     readImages(&frames, filename);
 
-    // Animated files can store partial frames. Assemble them before cropping.
+    // Animated files can store partial frames. Assemble them before resizing.
     if (frames.size() > 1) {
       ImageVector coalesced;
       Magick::coalesceImages(&coalesced, frames.begin(), frames.end());
       frames.swap(coalesced);
     }
 
-    Magick::Geometry size(PORTRAIT_WIDTH, PORTRAIT_HEIGHT);
-    size.aspect(true);
+    const Magick::Geometry size(PORTRAIT_SIZE, PORTRAIT_SIZE);
     result.reserve(frames.size());
     for (Magick::Image &frame : frames) {
-      const size_t width = frame.columns();
-      const size_t height = frame.rows();
-      const size_t crop_width = std::min(width, std::max<size_t>(1, height * PORTRAIT_WIDTH / PORTRAIT_HEIGHT));
-      const size_t crop_height = std::min(height, std::max<size_t>(1, width * PORTRAIT_HEIGHT / PORTRAIT_WIDTH));
-      frame.crop(Magick::Geometry(crop_width, crop_height,
-                                  (width - crop_width) / 2, (height - crop_height) / 2));
-      frame.repage();
       frame.resize(size, Magick::LanczosFilter);
       result.push_back(PreRenderImage(frame));
     }
@@ -503,16 +497,18 @@ static PreRenderedFrames LoadPortrait(const char *filename) {
     fprintf(stderr, "Error loading %s: %s\n", filename, e.what());
     return {};
   }
-  printf("Loaded %s: %zu frame(s), cropped to %dx%d\n",
-         filename, result.size(), PORTRAIT_WIDTH, PORTRAIT_HEIGHT);
+  printf("Loaded %s: %zu frame(s), fitted to %dx%d\n",
+         filename, result.size(), PORTRAIT_SIZE, PORTRAIT_SIZE);
   return result;
 }
 
 static void DrawPortrait(const PreRenderedImage &image, Canvas *canvas) {
-  for (int y = 0; y < image.height; ++y) {
-    for (int x = 0; x < image.width; ++x) {
-      const Pixel &p = image.pixels[y * image.width + x];
-      canvas->SetPixel(PORTRAIT_X + x, PORTRAIT_Y + y, p.r, p.g, p.b);
+  constexpr int left = PORTRAIT_X + (PORTRAIT_WIDTH - PORTRAIT_SIZE) / 2;
+  constexpr int top = PORTRAIT_Y + (PORTRAIT_HEIGHT - PORTRAIT_SIZE) / 2;
+  for (int y = 0; y < PORTRAIT_SIZE; ++y) {
+    for (int x = 0; x < PORTRAIT_SIZE; ++x) {
+      const Pixel &p = image.pixels[y * PORTRAIT_SIZE + x];
+      canvas->SetPixel(left + x, top + y, p.r, p.g, p.b);
     }
   }
 }
@@ -717,7 +713,7 @@ int usage(const char *progname) {
   fprintf(stderr, "Usage: %s [led-matrix-options] <first-image> <second-image>\n", progname);
 #endif
   fprintf(stderr, "\nAlternates two %dx%d portraits every %lld seconds on a 64x32 matrix.\n",
-          PORTRAIT_WIDTH, PORTRAIT_HEIGHT, static_cast<long long>(PORTRAIT_DURATION.count()));
+          PORTRAIT_SIZE, PORTRAIT_SIZE, static_cast<long long>(PORTRAIT_DURATION.count()));
   fprintf(stderr, "The clock and date sit on the right and the daily fact scrolls below.\n\n");
 #ifndef CATS_PREVIEW
   rgb_matrix::PrintMatrixFlags(stderr, DefaultMatrixOptions());
