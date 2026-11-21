@@ -56,14 +56,25 @@ uncapped default (`--led-limit-refresh=0`). The service on the Pi can override t
 The app sets the display to 100% from 8:00 a.m. until 11:30 p.m. and 10% overnight,
 using the Pi's local time.
 
-1. On the Pi, check the service command and working directory. Use the service's
-   panel flags and image paths if they differ from the examples below.
+### Pull and rebuild
 
-   ```sh
-   systemctl show cats-display -p ExecStart -p WorkingDirectory
-   ```
+Run these on the Pi. Adjust the checkout path if yours differs.
 
-2. Stop the service so only one process drives the panel. Measure the uncapped
+```sh
+cd ~/rpi-rgb-led-matrix
+git pull --ff-only
+make -C examples-api-use cats
+systemctl show cats-display -p ExecStart -p WorkingDirectory
+systemctl cat cats-display
+```
+
+### Try 100 Hz from the checkout
+
+The commands below run the rebuilt binary with the new Ocean portrait and the
+existing Fungus photo. Use any extra panel flags from your service, such as its
+GPIO mapping, panel type, or slowdown settings.
+
+1. Stop the service so only one process drives the panel. Measure the uncapped
    refresh rate for about a minute with `--led-show-refresh`.
 
    ```sh
@@ -75,7 +86,7 @@ using the Pi's local time.
      ../img/ocean_portrait_blue.png ../img/fungus_small.png
    ```
 
-3. If the baseline is comfortably above 100 Hz, try a 100 Hz cap with busy
+2. If the baseline is comfortably above 100 Hz, try a 100 Hz cap with busy
    waiting disabled. The refresh thread can sleep between scans when a scan
    finishes early. Compare CPU usage and SSH responsiveness over Tailscale
    during both runs, and check the panel for visible flicker when possible.
@@ -87,11 +98,50 @@ using the Pi's local time.
      ../img/ocean_portrait_blue.png ../img/fungus_small.png
    ```
 
-4. Start the service again to return to its configured launch flags.
+3. Start the service again to return to its configured launch flags.
 
    ```sh
    sudo systemctl start cats-display
    ```
+
+### Update `cats-display.service`
+
+`cats` takes its two picture paths from `ExecStart`. If the first path still
+points to the old Ocean photo, change it to `ocean_portrait_blue.png`. If the
+service points to a deployed copy of `cats`, update that copy and put the new
+PNG alongside its images, or point the service at the rebuilt checkout.
+If the service already points to the rebuilt binary and the new photo, just
+restart it with `sudo systemctl restart cats-display`.
+
+Edit the main unit with the command below. If `systemctl cat` shows a drop-in
+that overrides `ExecStart`, update the command in that drop-in instead.
+
+```sh
+sudo systemctl edit --full cats-display
+```
+
+For a checkout at `/home/pi/rpi-rgb-led-matrix`, the relevant lines can look
+like this. Use your actual absolute paths and keep your existing panel flags.
+
+```ini
+[Service]
+WorkingDirectory=/home/pi/rpi-rgb-led-matrix/examples-api-use
+ExecStart=/home/pi/rpi-rgb-led-matrix/examples-api-use/cats --led-rows=32 --led-cols=64 ../img/ocean_portrait_blue.png ../img/fungus_small.png
+Restart=on-failure
+```
+
+With the driver's default privilege drop, the `daemon` user needs to be able
+to read the pictures and search their directories. The Pi build also reads
+its fonts from `/opt/cats-display/fonts`.
+
+If the 100 Hz test works well, add `--led-limit-refresh=100 --led-no-busy-waiting`
+to `ExecStart` before the picture paths. Apply the service changes and check the log.
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart cats-display
+sudo journalctl -u cats-display -n 30 --no-pager
+```
 
 Panels supported
 ----------------
