@@ -149,7 +149,7 @@ constexpr int CLOCK_X = PORTRAIT_WIDTH + 2;
 constexpr int CLOCK_WIDTH = MATRIX_WIDTH - CLOCK_X;
 constexpr int CLOCK_BASELINE = 13;
 constexpr int DATE_BASELINE = 21;
-constexpr int FACT_BASELINE = 31;
+constexpr int FACT_BASELINE = 30;
 
 #ifndef CATS_PREVIEW
 static CatsMatrix::Options DefaultMatrixOptions() {
