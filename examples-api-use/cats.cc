@@ -162,7 +162,7 @@ static CatsMatrix::Options DefaultMatrixOptions() {
 
 constexpr auto PORTRAIT_DURATION = std::chrono::seconds(8);
 constexpr auto SCROLL_PAUSE = std::chrono::seconds(1);
-constexpr auto SCROLL_STEP = std::chrono::milliseconds(25);
+constexpr auto SCROLL_STEP = std::chrono::microseconds(29'400);
 constexpr int SCROLL_GAP = 12;
 constexpr size_t MAX_FACT_RESPONSE_BYTES = 16 * 1024;
 constexpr char FACT_PREFIX[] = "Today's fact: ";
