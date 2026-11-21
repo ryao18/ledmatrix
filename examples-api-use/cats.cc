@@ -613,7 +613,7 @@ private:
   }
 
   static constexpr int TOP = PORTRAIT_Y + PORTRAIT_HEIGHT;
-  inline static const Color COLOR{100, 255, 100};
+  inline static const Color COLOR{186, 196, 255};
   int width_ = 0;
   int first_ink_column_ = 0;
   std::vector<uint8_t> pixels_;
